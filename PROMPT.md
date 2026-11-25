@@ -14,9 +14,8 @@ Instead of maintaining an isolated, manually uploaded file repository, **Kleen D
 - **Google Workspace & Multi-Format Streaming:** Automatically renders PDFs, Office files (`.docx`, `.xlsx`, `.pptx`), Google Docs/Sheets/Slides (exported via Drive API to PDF/viewer-ready streams), images, and media through authenticated backend proxy endpoints—never exposing raw Google Drive sharing URLs to participants.
 - **Fast Metadata Cache + Incremental Sync:** Stores mirrored node metadata (`driveFileId`, `parentDriveId`, `name`, `mimeType`, `sizeBytes`, `pageCount`, `dotIndex`, `driveModifiedAt`, `isFolder`) in PostgreSQL, kept up to date via `Drive Changes API` webhooks/scheduled polling plus an explicit **`Sync with Drive`** button. All VDR metadata (`permissions`, `notes`, `favorites`, `viewCounts`, `activityLogs`, `labels`) binds stably to `driveFileId` so Drive updates never break permissions or audit history.
 - **Hierarchical Dot-Indexing (`Automatic indexing`):** Parses existing numeric prefixes in Drive names (e.g., `1 ...`, `4.3 ...`, `4.3.5.6 ...`) or auto-assigns clean dot-delimited decimal indices (`1`, `1.1`, `1.1.1`, `2`, …) matching the Drive tree.
-- **Configurable Sync Mode (in `Settings > Google Drive Sync`):**
-  - *Mirror Read-Only Mode (Default):* Google Drive is the master editor; Drive changes flow one-way into Kleen Data Room, and destructive file mutations (`Upload`, `Create folder`, `Rename`, `Move`, `Delete`) are hidden or clearly marked as Drive-managed.
-  - *Two-Way Admin Sync Mode (Optional):* Admin file/folder actions (`Create folder`, `Upload`, `Rename`, `Move`, `Delete`) execute directly against the linked Google Drive folder via Drive API v3 and immediately reflect in the Data Room.
+- **Strict Read-Only Mirroring Mode (`drive.readonly`):**
+  - Google Drive is the sole master source for folders and files. **Kleen Data Room** operates strictly in **Read-Only Mirror & Sync Mode** using the `https://www.googleapis.com/auth/drive.readonly` scope—it never creates, uploads, renames, moves, or deletes files/folders on Google Drive. Any structure changes made inside Google Drive flow cleanly one-way into Kleen Data Room upon sync.
 
 ---
 
@@ -140,23 +139,17 @@ Two sub-tabs at the top: **`Activity`** and **`Documents`**.
    - Tracks e-signature requests (`Name`, `Status`, `Signers`, `Created on`), with a 3-step onboarding empty state (`1 Go to all documents` CTA button, `2 Select signers`, `3 Monitor progress`).
 
 #### `Documents > All` Toolbar Buttons & Click Behaviors
-1. **`Sync with Drive` (or `+ Add` dropdown in Two-Way Mode):**
-   - In *Read-Only Mirror Mode*: Primary **`Sync with Drive`** button pulls latest Drive Changes and refreshes the tree/table.
-   - In *Two-Way Admin Sync Mode*, **`+ Add`** opens a dropdown with:
-     - **`Create folder (Shift + F)`**: Inserts an inline `Enter folder name` input row at the top of the table (Enter creates folder in Google Drive & mirrors; Escape cancels).
-     - **`Create folder structure`**: Navigates to a **3-step wizard** (`/documents/create-folder-structure`: `1 Upload file` XLSX/CSV -> `2 Check detected structure` -> `3 Preview your structure`) to batch-create folders inside the Google Drive root.
-     - **`Upload from computer >`**: Submenu (`Files` / `Folder`) uploading directly to the corresponding Google Drive folder.
-     - **`Connect / Import from Google Drive`**: Opens the Drive Folder Linker / Sync diagnostics drawer.
+1. **`Sync with Drive` button (with Drive Status Pill):**
+   - Pulls the latest changes from the connected Google Drive root folder (`Drive Changes API` + recursive reconciliation) and refreshes the mirrored folder tree, file list, sizes, page counts, and timestamps. Clicking the adjacent **`Open in Google Drive`** (Admin only) opens the source Drive folder in a new tab for file/folder management.
 2. **`Download` button:** Downloads selected files/folders (or current folder) as individual files or a structured `.zip`, subject to group download permissions (`Original`, `PDF` with watermark, or `Encrypted`—or disabled with tooltip if group has `View`/`Fence` only).
 3. **`Project index` dropdown:**
    - *Export*:
      - **`Full project index`**: Immediately exports the complete hierarchical index (XLSX/CSV/PDF) reflecting all visible items for the user's permission level.
      - **`Custom project index`**: Opens modal with **`Contents`** radio (`Files and folders` | `Only files` | `Only folders`), **`Recycle bin`** toggle, **`Documents uploaded from`** toggle + date picker, **`Cancel`** / **`Export`**.
    - *Manage*:
-     - **`Rebuild index`**: Opens warning modal (*"Rebuilding index will cause complete and non-reversible renumbering of all contents of this folder. Would you like to proceed?"*, **`Cancel`** / **`Confirm`**).
-     - **`Bulk rename`**: Pattern-based batch renaming across selected items (synced to Drive if Two-Way mode enabled).
+     - **`Rebuild index`**: Opens warning modal (*"Rebuilding index will refresh and normalize display numbering for all mirrored items in this folder. Would you like to proceed?"*, **`Cancel`** / **`Confirm`**) without mutating source Drive filenames.
 4. **Toolbar `...` (`Documents more menu`):**
-   - Displays contextual actions for the current folder or selection: `Open in new browser tab`, `Copy link`, `Share`, `View reports`, `Add to favorites (S)`, `Copy (Ctrl+C)`, `Move (Ctrl+X)`, `Rename (N)`, `Delete (Delete)`.
+   - Displays contextual read-only/VDR actions for the current folder or selection: `Open in new browser tab`, `Copy link`, `Share`, `View reports`, `Add to favorites (S)`, `Open in Google Drive` (Admins only).
 5. **`View as` button:**
    - Opens modal listing all participant groups with `Search`, expandable member lists, info notice, `Cancel`, and **`View`**.
    - Selecting a group enters **Live Preview Mode**: shows a prominent top Apple-blue banner `"Viewing documents as <Group Name>"` with an **`X` Exit** button; restricts sidebar tabs, hides hidden folders/files, hides admin note counts, and enforces that group's download/watermark/fence rules so admins can verify exact investor experience.
@@ -176,8 +169,8 @@ Two sub-tabs at the top: **`Activity`** and **`Documents`**.
      - *Optional Toggleable*: `Viewed on`, `Permission`, `ID` (Drive file ID), `Redaction`.
 8. **Multi-Select Bulk Bar & Row Context (`...` / Right-Click) Menus:**
    - Selecting row checkboxes displays `Selected: N` in the toolbar with `Download`, `Add to Favorites`, `Copy Link`, and `...` bulk actions.
-   - **Folder Row Context Menu:** `Download >` (`Encrypted`, `PDF`, `Original`), `Open in new browser tab`, `Copy link`, `Share >` (`Manage permissions`, `Send notifications`), `View reports >` (`Activity log`, `Documents overview`, `Engagement matrix`, `Permissions log`), `Add >` (`Label`, `Note`, `To favorites · S`), and (if Two-Way Sync enabled) `Copy · Ctrl+C`, `Move · Ctrl+X`, `Rename · N`, `Delete · Delete`.
-   - **File Row Context Menu:** Same as folder plus **`View`**, **`Print`**, **`Edit >`** (`Redact`, `Upload new version`), **`Copy link >`** (`Internal access` | `External sharing`), and **`Share >`** includes `Request signature` and `Create external link`.
+   - **Folder Row Context Menu:** `Download >` (`Encrypted`, `PDF`, `Original`), `Open in new browser tab`, `Copy link`, `Share >` (`Manage permissions`, `Send notifications`), `View reports >` (`Activity log`, `Documents overview`, `Engagement matrix`, `Permissions log`), `Add >` (`Label`, `Note`, `To favorites · S`), `Open in Google Drive` (Admins only).
+   - **File Row Context Menu:** Same as folder plus **`View`**, **`Print`**, **`Copy link >`** (`Internal access` | `External sharing`), and **`Share >`** includes `Request signature` and `Create external link`.
 
 ---
 
@@ -300,7 +293,7 @@ Clicking any file (or `View`) opens a dedicated distraction-free viewer (in a ne
    - Left column: Editable **Project Name** (inline pencil -> Save/Cancel), **Project URL slug**, **Status dropdown** (`Live`, `Locked`, `Archived`, `Closed`) + **`Status history`** (`Show more` / `Show less`), and **`General info`** (`Project ID`, `Project type`, `Storage / Sync Region`, `Administrator's contacts`).
    - Right column: **`Locking`** card (`Lock project` -> modal with `Unlock rights` admin multi-select + `Cancel` / `Confirm & lock`), **`Archiving`** card (`Archive project` + `Create offline backup v`: `Downloadable archive` | `USB archive`), and **`Closure`** card (`Close project`).
 2. **`Google Drive Sync` (`/settings/project/google-drive`, Kleen-specific):**
-   - Connect Google account / Service Account, paste or browse **Target Google Drive Folder URL / ID**, choose **`Mirror Read-Only`** vs **`Two-Way Admin Sync`**, configure auto-sync interval / webhook status, exclusion patterns (e.g., `.DS_Store`, temp files), view **Last Synced Timestamp & Sync Log**, and click **`Sync Now`** or **`Re-index All`**.
+   - Connect Google account (OAuth 2.0 `drive.readonly`) or Service Account / API Key, paste **Target Google Drive Folder URL / ID**, configure **Read-Only Mirror Sync** interval / webhook status, exclusion patterns (e.g., `.DS_Store`, temp files), view **Last Synced Timestamp & Sync Log**, and click **`Sync Now`** or **`Re-index All`**.
 3. **`Branding` (`/settings/project/branding`):**
    - **`Logo`** uploader (PNG/JPG `256×256` with hover Edit/Delete), **`Theme color`** (9 Apple-harmonized accent swatches), **`Login page background`** (`1920×1080` uploader with hover Edit/Delete), **`Customize invitations`** alias toggle, and **Live `Login page preview`** card on the right.
 4. **`Documents` (`/settings/project/documents`):**
@@ -326,7 +319,7 @@ Clicking any file (or `View`) opens a dedicated distraction-free viewer (in a ne
   - **`Offline backup`** card: Expandable **`Downloadable archive`** (`+ Create archive` builds downloadable ZIP with full folder structure + index) and **`USB archive`** (`Place order` 3-step wizard: `1 Archives`, `2 Recipients`, `3 Confirmation`).
   - **`Project closure`** card (`Close project` -> `/archiving/close`: `Now` vs `Later` scheduler, `Reason` dropdown, NPS feedback scale `1–10`, `Cancel` / `Close project`).
 - **Recycle bin (`/recycle-bin`):**
-  - Empty state when clean; when items are deleted, lists deleted folders/files with `Restore` and `Empty recycle bin` / permanent delete actions (synced appropriately with Google Drive Trash when Two-Way mode is active).
+  - Empty state when clean; displays items trashed/removed from the mirrored Google Drive folder during sync (for audit visibility) with admin options to hide from index or inspect removal history.
 
 ---
 
