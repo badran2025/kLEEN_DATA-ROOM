@@ -167,7 +167,11 @@ export function DashboardView({
       onNavigateTab("reports:subscriptions");
       return;
     }
-    window.location.href = "/api/reports?export=activity";
+    if (exportFormat === "PDF") {
+      window.location.href = "/api/reports?export=dashboard-pdf";
+    } else {
+      window.location.href = "/api/reports?export=activity";
+    }
     setModalMode(null);
   }
 

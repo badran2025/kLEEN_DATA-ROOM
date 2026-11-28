@@ -64,6 +64,16 @@ export function DataRoomShell({
   const [syncingTop, setSyncingTop] = useState(false);
   const [ndaChecked, setNdaChecked] = useState(false);
 
+  // Account edit states
+  const [accFirst, setAccFirst] = useState(initialSession.user?.firstName || "");
+  const [accLast, setAccLast] = useState(initialSession.user?.lastName || "");
+  const [accCompany, setAccCompany] = useState(initialSession.user?.company || "");
+  const [accJob, setAccJob] = useState(initialSession.user?.jobTitle || "");
+  const [accPhone, setAccPhone] = useState(initialSession.user?.phone || "");
+  const [accTz, setAccTz] = useState(initialSession.user?.timezone || "Asia/Riyadh");
+  const [accNewPass, setAccNewPass] = useState("");
+  const [accMsg, setAccMsg] = useState<string | null>(null);
+
   useEffect(() => {
     setSession(initialSession);
   }, [initialSession]);
@@ -140,7 +150,11 @@ export function DataRoomShell({
               className="flex w-full items-center justify-between gap-2 rounded-xl p-1.5 text-left transition hover:bg-[var(--apple-hover)]"
             >
               <div className="flex min-w-0 items-center gap-2.5">
-                <KleenLogo size={30} accent={project.themeColor} />
+                {project.logoUrl ? (
+                  <img src={project.logoUrl} alt={project.name} className="h-[30px] w-[30px] rounded-[8px] object-cover" />
+                ) : (
+                  <KleenLogo size={30} accent={project.themeColor} />
+                )}
                 {!railCollapsed && (
                   <div className="min-w-0">
                     <div className="truncate text-xs font-semibold">{project.name}</div>
@@ -548,18 +562,97 @@ export function DataRoomShell({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
           <div className="apple-card w-full max-w-md space-y-4 p-6 text-xs">
             <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-3">
-              <h3 className="text-base font-semibold">
-                {showAccountModal === "personal" ? "Personal information" : "Security settings"}
-              </h3>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccMsg(null);
+                    setShowAccountModal("personal");
+                  }}
+                  className={`rounded-lg px-3 py-1 font-semibold ${
+                    showAccountModal === "personal" ? "bg-[#007AFF] text-white" : "text-[var(--apple-text-secondary)]"
+                  }`}
+                >
+                  Personal information
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccMsg(null);
+                    setShowAccountModal("security");
+                  }}
+                  className={`rounded-lg px-3 py-1 font-semibold ${
+                    showAccountModal === "security" ? "bg-[#007AFF] text-white" : "text-[var(--apple-text-secondary)]"
+                  }`}
+                >
+                  Security settings
+                </button>
+              </div>
               <button type="button" onClick={() => setShowAccountModal(null)}><X className="h-4 w-4" /></button>
             </div>
             {showAccountModal === "personal" ? (
-              <div className="space-y-2.5">
-                <div>Email: <strong>{user.email}</strong></div>
-                <div>Name: <strong>{user.firstName} {user.lastName}</strong></div>
-                <div>Company: <strong>{user.company}</strong></div>
-                <div>Time zone: <strong>{user.timezone}</strong></div>
-              </div>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const r = await fetch("/api/settings", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      scope: "personal",
+                      firstName: accFirst,
+                      lastName: accLast,
+                      company: accCompany,
+                      jobTitle: accJob,
+                      phone: accPhone,
+                      timezone: accTz,
+                    }),
+                  });
+                  if (r.ok) {
+                    setAccMsg("Profile updated");
+                    onReloadSession();
+                  }
+                }}
+                className="space-y-2.5"
+              >
+                <div>
+                  <label className="mb-1 block text-[var(--apple-text-muted)]">Email (read-only)</label>
+                  <input disabled value={user.email} className="w-full rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/60 px-3 py-1.5 opacity-70" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block font-medium">First name</label>
+                    <input value={accFirst} onChange={(e) => setAccFirst(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-medium">Last name</label>
+                    <input value={accLast} onChange={(e) => setAccLast(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block font-medium">Company</label>
+                    <input value={accCompany} onChange={(e) => setAccCompany(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-medium">Job title</label>
+                    <input value={accJob} onChange={(e) => setAccJob(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block font-medium">Phone</label>
+                    <input value={accPhone} onChange={(e) => setAccPhone(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-medium">Time zone</label>
+                    <input value={accTz} onChange={(e) => setAccTz(e.target.value)} className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5" />
+                  </div>
+                </div>
+                {accMsg && <div className="text-emerald-500">{accMsg}</div>}
+                <div className="flex justify-end pt-2">
+                  <button type="submit" className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">Save changes</button>
+                </div>
+              </form>
             ) : (
               <div className="space-y-3">
                 <label className="flex items-center justify-between rounded-xl border border-[var(--apple-border)] p-3">
@@ -577,6 +670,39 @@ export function DataRoomShell({
                     }}
                   />
                 </label>
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (accNewPass.length < 6) return;
+                    const r = await fetch("/api/settings", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ scope: "personal", action: "change-password", newPassword: accNewPass }),
+                    });
+                    if (r.ok) {
+                      setAccNewPass("");
+                      setAccMsg("Password updated");
+                    }
+                  }}
+                  className="space-y-2 rounded-xl border border-[var(--apple-border)] p-3"
+                >
+                  <div className="font-medium">Change password</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      minLength={6}
+                      required
+                      value={accNewPass}
+                      onChange={(e) => setAccNewPass(e.target.value)}
+                      placeholder="New password (min 6 chars)"
+                      className="flex-1 rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-2.5 py-1.5"
+                    />
+                    <button type="submit" className="rounded-lg bg-[#007AFF] px-3 py-1.5 font-semibold text-white">
+                      Update
+                    </button>
+                  </div>
+                  {accMsg && <div className="text-emerald-500">{accMsg}</div>}
+                </form>
                 <div className="rounded-xl bg-[var(--apple-bg)] p-3 text-[11px] text-[var(--apple-text-secondary)]">
                   Current session: Browser • {user.timezone}
                 </div>

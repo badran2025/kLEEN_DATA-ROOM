@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   UserPlus,
   UsersRound,
@@ -68,6 +69,9 @@ export function ParticipantsView({
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importingBulk, setImportingBulk] = useState(false);
+  const [importGroupId, setImportGroupId] = useState("");
+  const [rowMenuGroupId, setRowMenuGroupId] = useState<string | null>(null);
   const [showReportMenu, setShowReportMenu] = useState(false);
 
   // Detail drilldown views
@@ -587,14 +591,101 @@ export function ParticipantsView({
                         {formatDateShort(g.members[0]?.lastSignInAt)}
                       </td>
                       <td className="px-4 py-3 tabular-nums">{g.members.length}</td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="relative px-3 py-3 text-right">
                         <button
                           type="button"
-                          onClick={() => setActiveGroupDetail(g)}
+                          onClick={() => setRowMenuGroupId((cur) => (cur === g.id ? null : g.id))}
                           className="rounded-lg p-1 hover:bg-[var(--apple-bg)]"
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </button>
+                        {rowMenuGroupId === g.id && (
+                          <div className="apple-glass absolute top-9 right-3 z-40 w-52 rounded-xl border border-[var(--apple-border-strong)] p-1.5 text-left text-xs shadow-2xl">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRowMenuGroupId(null);
+                                setActiveGroupDetail(g);
+                              }}
+                              className="block w-full rounded-lg px-2.5 py-1.5 hover:bg-[var(--apple-hover)]"
+                            >
+                              Group settings & permissions
+                            </button>
+                            <div className="my-1 border-t border-[var(--apple-border)] px-2.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--apple-text-muted)]">
+                              Document updates
+                            </div>
+                            {(["Never", "Daily", "Weekly"] as const).map((freq) => (
+                              <button
+                                key={freq}
+                                type="button"
+                                onClick={async () => {
+                                  setRowMenuGroupId(null);
+                                  await fetch("/api/participants", {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      targetType: "group",
+                                      groupId: g.id,
+                                      action: "update-settings",
+                                      docUpdateFrequency: freq,
+                                    }),
+                                  });
+                                  await loadParticipants();
+                                  showToast(`Document updates for "${g.name}": ${freq}`);
+                                }}
+                                className="flex w-full items-center justify-between rounded-lg px-2.5 py-1 hover:bg-[var(--apple-hover)]"
+                              >
+                                <span>{freq}</span>
+                                {g.docUpdateFrequency === freq && <Check className="h-3 w-3 text-[#007AFF]" />}
+                              </button>
+                            ))}
+                            {!g.isDefaultAdmin && (
+                              <>
+                                <div className="my-1 border-t border-[var(--apple-border)]" />
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setRowMenuGroupId(null);
+                                    await fetch("/api/participants", {
+                                      method: "PATCH",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({
+                                        targetType: "group",
+                                        groupId: g.id,
+                                        action: g.accessEnabled ? "deactivate" : "activate",
+                                      }),
+                                    });
+                                    await loadParticipants();
+                                    showToast(`${g.accessEnabled ? "Deactivated" : "Activated"} ${g.name}`);
+                                  }}
+                                  className="block w-full rounded-lg px-2.5 py-1.5 hover:bg-[var(--apple-hover)]"
+                                >
+                                  {g.accessEnabled ? "Deactivate group" : "Activate group"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setRowMenuGroupId(null);
+                                    await fetch("/api/participants", {
+                                      method: "PATCH",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({
+                                        targetType: "group",
+                                        groupId: g.id,
+                                        action: "delete",
+                                      }),
+                                    });
+                                    await loadParticipants();
+                                    showToast(`Deleted group "${g.name}"`);
+                                  }}
+                                  className="block w-full rounded-lg px-2.5 py-1.5 text-red-500 hover:bg-red-500/10"
+                                >
+                                  Delete group
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </td>
                     </tr>
                     {isOpen &&
@@ -624,25 +715,68 @@ export function ParticipantsView({
                           </td>
                           <td className="px-4 py-2.5 tabular-nums">{formatDateShort(m.lastSignInAt)}</td>
                           <td className="px-4 py-2.5 text-right" colSpan={2}>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const r = await fetch("/api/participants", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ action: "resend-invite", participantId: m.id }),
-                                });
-                                if (r.ok) {
-                                  const d = await r.json();
-                                  const url = `${window.location.origin}/?invite=${d.inviteToken}`;
-                                  navigator.clipboard?.writeText(url);
-                                  showToast(`Copied invite link for ${d.email}`);
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border)] px-2 py-1 text-[10px] font-medium text-[#007AFF] hover:bg-[var(--apple-selected)]"
-                            >
-                              <Copy className="h-3 w-3" /> Copy invite link
-                            </button>
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const r = await fetch("/api/participants", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ action: "resend-invite", participantId: m.id }),
+                                  });
+                                  if (r.ok) {
+                                    const d = await r.json();
+                                    const url = `${window.location.origin}/?invite=${d.inviteToken}`;
+                                    navigator.clipboard?.writeText(url);
+                                    showToast(`Copied invite link for ${d.email}`);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border)] px-2 py-1 text-[10px] font-medium text-[#007AFF] hover:bg-[var(--apple-selected)]"
+                              >
+                                <Copy className="h-3 w-3" /> Copy invite
+                              </button>
+                              {!g.isDefaultAdmin && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await fetch("/api/participants", {
+                                        method: "PATCH",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          targetType: "participant",
+                                          participantId: m.id,
+                                          action: m.accessEnabled ? "deactivate" : "activate",
+                                        }),
+                                      });
+                                      await loadParticipants();
+                                    }}
+                                    className="rounded-lg border border-[var(--apple-border)] px-2 py-1 text-[10px] hover:bg-[var(--apple-bg)]"
+                                  >
+                                    {m.accessEnabled ? "Disable" : "Enable"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await fetch("/api/participants", {
+                                        method: "PATCH",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          targetType: "participant",
+                                          participantId: m.id,
+                                          action: "delete",
+                                        }),
+                                      });
+                                      await loadParticipants();
+                                      showToast(`Removed ${m.email}`);
+                                    }}
+                                    className="rounded-lg border border-red-500/30 px-2 py-1 text-[10px] text-red-500 hover:bg-red-500/10"
+                                  >
+                                    Remove
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1150,24 +1284,103 @@ export function ParticipantsView({
               </button>
             </div>
             <ol className="list-decimal space-y-2 pl-4 text-[var(--apple-text-secondary)]">
-              <li>Download template (ensure groups are created prior to download).</li>
-              <li>Fill out participant emails, full names, and group names.</li>
-              <li>Upload CSV/XLSX to invite in bulk.</li>
+              <li>Download the template (ensure target groups already exist).</li>
+              <li>Fill out <code className="font-mono">Email</code>, <code className="font-mono">Name</code>, and optional <code className="font-mono">Group</code> columns.</li>
+              <li>Select default fallback group and upload CSV or XLSX file below.</li>
             </ol>
-            <div className="flex justify-between pt-2">
+            <div>
+              <label className="mb-1 block font-medium">Default target group (when Group column is blank)</label>
+              <select
+                value={importGroupId || groups.find((g) => !g.isDefaultAdmin)?.id || groups[0]?.id || ""}
+                onChange={(e) => setImportGroupId(e.target.value)}
+                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+              >
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} ({g.role})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
               <a
                 href="/api/participants?format=xlsx"
-                className="rounded-xl border border-[var(--apple-border)] px-3 py-2 font-medium"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] px-3 py-2 font-medium hover:bg-[var(--apple-hover)]"
               >
-                Get template
+                <Download className="h-3.5 w-3.5" /> Get template
               </a>
-              <button
-                type="button"
-                onClick={() => setShowImportModal(false)}
-                className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white"
-              >
-                Done
-              </button>
+              <div className="flex items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white hover:bg-[#0066D6]">
+                  <Upload className="h-3.5 w-3.5" />
+                  {importingBulk ? "Importing..." : "Upload CSV / XLSX"}
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    disabled={importingBulk}
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setImportingBulk(true);
+                      try {
+                        const buf = await file.arrayBuffer();
+                        const wb = XLSX.read(buf, { type: "array" });
+                        const sheet = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+                        const fallbackGid = importGroupId || groups.find((g) => !g.isDefaultAdmin)?.id || groups[0]?.id || "";
+                        const byGroup = new Map<string, Array<{ email: string; fullName: string }>>();
+
+                        for (const r of rows) {
+                          const email = String(r.Email || r.email || r["E-mail"] || "").trim();
+                          if (!email || !email.includes("@")) continue;
+                          const fullName = String(r.Name || r["Full Name"] || r.fullName || "").trim();
+                          const grpCol = String(r.Group || r.group || "").trim().toLowerCase();
+                          const matchedGroup = groups.find((g) => g.name.toLowerCase() === grpCol);
+                          const gid = matchedGroup?.id || fallbackGid;
+                          if (!gid) continue;
+                          const list = byGroup.get(gid) || [];
+                          list.push({ email, fullName });
+                          byGroup.set(gid, list);
+                        }
+
+                        let allInvites: Array<{ email: string; fullName: string; inviteToken: string }> = [];
+                        for (const [gid, entries] of byGroup.entries()) {
+                          const res = await fetch("/api/participants", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "add-participants",
+                              groupId: gid,
+                              entries,
+                            }),
+                          });
+                          if (res.ok) {
+                            const d = await res.json();
+                            if (Array.isArray(d.invites)) allInvites = allInvites.concat(d.invites);
+                          }
+                        }
+                        setShowImportModal(false);
+                        await loadParticipants();
+                        if (allInvites.length > 0) {
+                          setGeneratedInvites(allInvites);
+                          showToast(`Imported ${allInvites.length} participant(s)`);
+                        } else {
+                          showToast("No valid emails found in uploaded file");
+                        }
+                      } finally {
+                        setImportingBulk(false);
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowImportModal(false)}
+                  className="rounded-xl border border-[var(--apple-border)] px-3 py-2"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

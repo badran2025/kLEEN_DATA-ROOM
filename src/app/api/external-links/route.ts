@@ -93,5 +93,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, id });
   }
 
+  if (body.action === "update-signature" && body.id) {
+    const status = ["Pending", "Signed", "Declined"].includes(body.status) ? String(body.status) : "Signed";
+    db.prepare("UPDATE signature_requests SET status = ? WHERE id = ? AND projectId = ?").run(
+      status,
+      String(body.id),
+      session.project.id
+    );
+    return NextResponse.json({ ok: true });
+  }
+
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }

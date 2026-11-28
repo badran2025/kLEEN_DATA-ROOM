@@ -2,12 +2,71 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getCurrentSession } from "@/lib/auth";
 import { getDb, nowIso, plain, uid } from "@/lib/db";
+import { generateAcceptedTermsPdf } from "@/lib/pdf-utils";
+import { renderNdaText } from "@/lib/nda-template";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const db = getDb();
+  const exportMode = req.nextUrl.searchParams.get("export");
+  const accId = req.nextUrl.searchParams.get("id");
+
+  if (exportMode === "accepted-term-pdf" && accId) {
+    const row = db
+      .prepare(
+        `SELECT ta.*, u.email, u.firstName, u.lastName, u.company, u.jobTitle,
+                t.title as termsTitle, t.type as termsType, t.content as termsContent, t.updatedAt as termsUpdatedAt,
+                g.name as currentGroupName, g.role as groupRole
+         FROM terms_acceptances ta
+         JOIN users u ON u.id = ta.userId
+         JOIN terms_of_access t ON t.id = ta.termsId
+         LEFT JOIN project_participants pp ON pp.userId = u.id AND pp.projectId = t.projectId
+         LEFT JOIN groups g ON g.id = pp.groupId
+         WHERE ta.id = ? AND t.projectId = ?`
+      )
+      .get(accId, session.project.id) as Record<string, unknown> | undefined;
+
+    if (!row) return NextResponse.json({ error: "Acceptance record not found" }, { status: 404 });
+
+    const fullName = `${String(row.firstName || "")} ${String(row.lastName || "")}`.trim() || String(row.email);
+    const rawTemplate = String(row.acceptedContent || row.termsContent || "");
+    const rendered = renderNdaText(rawTemplate, {
+      name: fullName,
+      title: String(row.jobTitle || "Authorized Representative"),
+      company: String(row.company || "Investor Entity"),
+      email: String(row.email),
+      date: new Date(String(row.acceptedAt)).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }),
+    });
+
+    const pdfBuf = await generateAcceptedTermsPdf({
+      projectName: session.project.name,
+      termsTitle: String(row.termsTitle),
+      termsType: String(row.termsType || "NDA"),
+      acceptedByName: fullName,
+      acceptedByEmail: String(row.email),
+      company: String(row.company || ""),
+      groupName: String(row.groupName || row.currentGroupName || "Investor Group"),
+      groupRole: String(row.groupRole || "User"),
+      publishedAt: new Date(String(row.publishedAt || row.termsUpdatedAt || row.acceptedAt)).toLocaleString("en-US"),
+      acceptedAt: new Date(String(row.acceptedAt)).toLocaleString("en-US"),
+      content: rendered,
+    });
+
+    const safeFile = `${String(row.termsTitle)}-${fullName}`.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    return new NextResponse(new Uint8Array(pdfBuf), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${safeFile}.pdf"`,
+      },
+    });
+  }
+
   const statusHistory = (
     db.prepare("SELECT * FROM project_status_history WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
   ).map((h) => plain(h));
@@ -27,10 +86,15 @@ export async function GET() {
   const acceptances = (
     db
       .prepare(
-        `SELECT ta.id, ta.termsId, ta.acceptedAt, u.email, u.firstName, u.lastName, t.title as termsTitle
+        `SELECT ta.id, ta.termsId, ta.acceptedAt, ta.publishedAt, ta.groupName, ta.acceptedContent,
+                u.id as userId, u.email, u.firstName, u.lastName, u.company, u.jobTitle,
+                t.title as termsTitle, t.type as termsType, t.content as termsContent, t.updatedAt as termsUpdatedAt,
+                g.name as currentGroupName, g.role as groupRole
          FROM terms_acceptances ta
          JOIN users u ON u.id = ta.userId
          JOIN terms_of_access t ON t.id = ta.termsId
+         LEFT JOIN project_participants pp ON pp.userId = u.id AND pp.projectId = t.projectId
+         LEFT JOIN groups g ON g.id = pp.groupId
          WHERE t.projectId = ?
          ORDER BY ta.acceptedAt DESC`
       )
@@ -99,11 +163,20 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "accept-terms" && body.termsId) {
-    db.prepare("INSERT INTO terms_acceptances (id, termsId, userId, acceptedAt) VALUES (?, ?, ?, ?)").run(
+    const termRow = db
+      .prepare("SELECT content, updatedAt FROM terms_of_access WHERE id = ? AND projectId = ?")
+      .get(String(body.termsId), session.project.id) as { content: string; updatedAt: string } | undefined;
+
+    db.prepare(
+      "INSERT INTO terms_acceptances (id, termsId, userId, acceptedAt, acceptedContent, groupName, publishedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(
       uid("acc"),
       String(body.termsId),
       session.user.id,
-      now
+      now,
+      termRow?.content || "",
+      session.effectiveGroup.name,
+      termRow?.updatedAt || now
     );
     return NextResponse.json({ ok: true });
   }

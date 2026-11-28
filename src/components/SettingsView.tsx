@@ -15,6 +15,9 @@ import {
   Shield,
   Sparkles,
   Download,
+  Printer,
+  ArrowLeft,
+  ImagePlus,
 } from "lucide-react";
 import type { GroupDto, ProjectDto, UserDto } from "@/lib/types";
 import { formatDateShort, formatDateTime } from "@/lib/format";
@@ -71,10 +74,20 @@ export function SettingsView({
       id: string;
       termsId: string;
       acceptedAt: string;
+      publishedAt?: string | null;
+      groupName?: string | null;
+      acceptedContent?: string | null;
       email: string;
       firstName: string;
       lastName: string;
+      company?: string;
+      jobTitle?: string;
       termsTitle: string;
+      termsType?: string;
+      termsContent?: string;
+      termsUpdatedAt?: string;
+      currentGroupName?: string;
+      groupRole?: string;
     }>;
   } | null>(null);
 
@@ -113,6 +126,22 @@ export function SettingsView({
     content: string;
   } | null>(null);
   const [previewAccepted, setPreviewAccepted] = useState(false);
+
+  // Download accepted terms sub-view (matching iDeals /settings/project/terms-of-access/accepted)
+  const [showAcceptedView, setShowAcceptedView] = useState(false);
+  const [accTermsFilter, setAccTermsFilter] = useState("All");
+  const [accUserSearch, setAccUserSearch] = useState("");
+  const [accGroupFilter, setAccGroupFilter] = useState("All");
+  const [accSortAsc, setAccSortAsc] = useState(false);
+
+  // General & Security editable drafts
+  const [projTypeDraft, setProjTypeDraft] = useState(project.projectType);
+  const [adminEmailDraft, setAdminEmailDraft] = useState(project.adminEmail);
+  const [adminPhoneDraft, setAdminPhoneDraft] = useState(project.adminPhone);
+  const [allowedDomainsDraft, setAllowedDomainsDraft] = useState(project.allowedDomains || "");
+  const [allowedIpsDraft, setAllowedIpsDraft] = useState(project.allowedIps || "");
+  const [wmCustomTextDraft, setWmCustomTextDraft] = useState(project.watermarkCustomText || "");
+  const [unlockAdmins, setUnlockAdmins] = useState<string[]>([user.email]);
 
   const [toast, setToast] = useState<string | null>(null);
 
@@ -336,9 +365,44 @@ export function SettingsView({
             <div className="space-y-1.5 border-t border-[var(--apple-border)] pt-4">
               <div className="font-semibold">General info</div>
               <div>Project ID: <span className="tabular-nums font-medium">{project.projectCode}</span></div>
-              <div>Project type: <span className="font-medium">{project.projectType}</span></div>
               <div>Storage location: <span className="font-medium">{project.storageLocation}</span></div>
-              <div>Administrator&apos;s contacts: {project.adminEmail} • {project.adminPhone}</div>
+              <div className="grid grid-cols-1 gap-2 pt-2 sm:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-[11px] text-[var(--apple-text-muted)]">Project type</label>
+                  <select
+                    value={projTypeDraft}
+                    onChange={(e) => {
+                      setProjTypeDraft(e.target.value);
+                      updateProjectFields({ projectType: e.target.value });
+                    }}
+                    className="w-full rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-2.5 py-1.5"
+                  >
+                    <option>Fundraising</option>
+                    <option>M&A sell side</option>
+                    <option>M&A buy side</option>
+                    <option>IPO and exits</option>
+                    <option>Strategic partnership</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-[var(--apple-text-muted)]">Admin contact email</label>
+                  <input
+                    value={adminEmailDraft}
+                    onChange={(e) => setAdminEmailDraft(e.target.value)}
+                    onBlur={() => updateProjectFields({ adminEmail: adminEmailDraft })}
+                    className="w-full rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-2.5 py-1.5"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-[var(--apple-text-muted)]">Admin contact phone</label>
+                  <input
+                    value={adminPhoneDraft}
+                    onChange={(e) => setAdminPhoneDraft(e.target.value)}
+                    onBlur={() => updateProjectFields({ adminPhone: adminPhoneDraft })}
+                    className="w-full rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-2.5 py-1.5"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -494,6 +558,74 @@ export function SettingsView({
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="apple-card space-y-5 p-6 text-xs">
             <h3 className="text-base font-semibold">Branding</h3>
+
+            {/* Logo Uploader */}
+            <div>
+              <div className="mb-1.5 font-medium">Logo (PNG/JPG, 256×256 recommended)</div>
+              <div className="flex items-center gap-3">
+                {project.logoUrl ? (
+                  <img src={project.logoUrl} alt="Logo" className="h-14 w-14 rounded-xl border border-[var(--apple-border)] object-cover" />
+                ) : (
+                  <KleenLogo size={52} accent={project.themeColor} />
+                )}
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] px-3 py-2 font-medium hover:bg-[var(--apple-hover)]">
+                  <ImagePlus className="h-3.5 w-3.5" /> Upload Logo
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const reader = new FileReader();
+                      reader.onload = () => updateProjectFields({ logoUrl: String(reader.result || "") }, "Logo updated");
+                      reader.readAsDataURL(f);
+                    }}
+                  />
+                </label>
+                {project.logoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => updateProjectFields({ logoUrl: null }, "Logo reset")}
+                    className="rounded-xl border border-red-500/30 px-2.5 py-2 text-red-500 hover:bg-red-500/10"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Login Page Background Uploader */}
+            <div>
+              <div className="mb-1.5 font-medium">Login page background (PNG/JPG, 1920×1080 recommended)</div>
+              <div className="flex items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] px-3 py-2 font-medium hover:bg-[var(--apple-hover)]">
+                  <ImagePlus className="h-3.5 w-3.5" /> Upload Background
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const reader = new FileReader();
+                      reader.onload = () => updateProjectFields({ loginBgUrl: String(reader.result || "") }, "Background updated");
+                      reader.readAsDataURL(f);
+                    }}
+                  />
+                </label>
+                {project.loginBgUrl && (
+                  <button
+                    type="button"
+                    onClick={() => updateProjectFields({ loginBgUrl: null }, "Background reset")}
+                    className="rounded-xl border border-red-500/30 px-2.5 py-2 text-red-500 hover:bg-red-500/10"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div>
               <div className="mb-2 font-medium">Theme color</div>
               <div className="flex flex-wrap gap-2.5">
@@ -525,17 +657,26 @@ export function SettingsView({
 
           <div className="apple-card p-6 text-xs">
             <div className="mb-3 font-semibold text-[var(--apple-text-secondary)]">Login page preview</div>
-            <div className="flex flex-col items-center justify-center rounded-2xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-8">
-              <KleenLogo size={38} accent={project.themeColor} />
-              <div className="mt-3 text-sm font-semibold">Sign in to {project.name}</div>
-              <div className="mt-3 w-56 rounded-xl border border-[var(--apple-border)] bg-[var(--apple-surface)] px-3 py-2 text-[11px] text-[var(--apple-text-muted)]">
-                name@company.com
-              </div>
-              <div
-                className="mt-2.5 w-56 rounded-xl py-2 text-center text-[11px] font-semibold text-white"
-                style={{ backgroundColor: project.themeColor }}
-              >
-                Continue
+            <div
+              className="flex flex-col items-center justify-center rounded-2xl border border-[var(--apple-border)] bg-[var(--apple-bg)] bg-cover bg-center p-8"
+              style={project.loginBgUrl ? { backgroundImage: `url(${project.loginBgUrl})` } : undefined}
+            >
+              <div className="apple-glass flex flex-col items-center rounded-2xl border border-[var(--apple-border-strong)] p-6 shadow-xl">
+                {project.logoUrl ? (
+                  <img src={project.logoUrl} alt="Logo" className="h-10 w-10 rounded-xl object-cover" />
+                ) : (
+                  <KleenLogo size={38} accent={project.themeColor} />
+                )}
+                <div className="mt-3 text-sm font-semibold">Sign in to {project.name}</div>
+                <div className="mt-3 w-56 rounded-xl border border-[var(--apple-border)] bg-[var(--apple-surface)] px-3 py-2 text-[11px] text-[var(--apple-text-muted)]">
+                  name@company.com
+                </div>
+                <div
+                  className="mt-2.5 w-56 rounded-xl py-2 text-center text-[11px] font-semibold text-white"
+                  style={{ backgroundColor: project.themeColor }}
+                >
+                  Continue
+                </div>
               </div>
             </div>
           </div>
@@ -626,7 +767,7 @@ export function SettingsView({
       )}
 
       {/* 7. Terms of Access */}
-      {subTab === "terms-of-access" && (
+      {subTab === "terms-of-access" && !showAcceptedView && (
         <div className="space-y-4 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -638,20 +779,7 @@ export function SettingsView({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  const rows = meta?.acceptances || [];
-                  const csv = [
-                    "Terms Title,Participant,Email,Accepted At",
-                    ...rows.map((r) => `"${r.termsTitle}","${r.firstName} ${r.lastName}","${r.email}","${r.acceptedAt}"`),
-                  ].join("\n");
-                  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${project.name}-accepted-terms.csv`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
+                onClick={() => setShowAcceptedView(true)}
                 className="flex items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-2 font-medium hover:bg-[var(--apple-hover)]"
               >
                 <Download className="h-3.5 w-3.5" /> Download accepted terms ({meta?.acceptances?.length || 0})
@@ -784,6 +912,176 @@ export function SettingsView({
         </div>
       )}
 
+      {/* 7B. Dedicated Download Accepted Terms Sub-View (matching iDeals /terms-of-access/accepted) */}
+      {subTab === "terms-of-access" && showAcceptedView && (
+        <div className="space-y-4 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="mb-1 flex items-center gap-1.5 text-[11px] text-[var(--apple-text-muted)]">
+                <button type="button" onClick={() => setShowAcceptedView(false)} className="hover:text-[#007AFF]">
+                  Terms of access
+                </button>
+                <span>&gt;</span>
+                <span className="font-semibold text-[var(--apple-text)]">Download accepted terms</span>
+              </div>
+              <h3 className="text-base font-semibold">Download accepted terms</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAcceptedView(false)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] px-3.5 py-2 font-medium hover:bg-[var(--apple-hover)]"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Exit
+            </button>
+          </div>
+
+          {/* Filter Bar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={accTermsFilter}
+              onChange={(e) => setAccTermsFilter(e.target.value)}
+              className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-1.5"
+            >
+              <option value="All">Agreement: All</option>
+              {(meta?.terms || []).map((t) => (
+                <option key={t.id} value={t.title}>
+                  {t.title} {!t.enabled ? "(Disabled)" : ""}
+                </option>
+              ))}
+            </select>
+            <select
+              value={accGroupFilter}
+              onChange={(e) => setAccGroupFilter(e.target.value)}
+              className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-1.5"
+            >
+              <option value="All">Group: All users</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.name}>
+                  {g.name} ({g.members?.length || 0})
+                </option>
+              ))}
+            </select>
+            <input
+              value={accUserSearch}
+              onChange={(e) => setAccUserSearch(e.target.value)}
+              placeholder="Search accepted by name or email..."
+              className="w-60 rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-1.5 outline-none"
+            />
+          </div>
+
+          {/* 5-Column Accepted Terms Table */}
+          <div className="apple-card overflow-hidden">
+            <table className="w-full text-left">
+              <thead className="border-b border-[var(--apple-border)] bg-[var(--apple-bg)]/50 text-[11px] font-semibold text-[var(--apple-text-secondary)]">
+                <tr>
+                  <th className="px-4 py-3">Accepted by</th>
+                  <th className="px-4 py-3">Group</th>
+                  <th className="px-4 py-3">Terms of access</th>
+                  <th className="px-4 py-3">Publication date</th>
+                  <th className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setAccSortAsc((v) => !v)}
+                      className="inline-flex items-center gap-1 hover:text-[var(--apple-text)]"
+                    >
+                      Accepted on {accSortAsc ? "↑" : "↓"}
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 text-right">Download</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--apple-border)]">
+                {(meta?.acceptances || [])
+                  .filter((a) => {
+                    if (accTermsFilter !== "All" && a.termsTitle !== accTermsFilter) return false;
+                    const grpName = a.groupName || a.currentGroupName || "Investor Group";
+                    if (accGroupFilter !== "All" && grpName !== accGroupFilter) return false;
+                    if (accUserSearch.trim()) {
+                      const q = accUserSearch.toLowerCase();
+                      const hay = `${a.firstName} ${a.lastName} ${a.email}`.toLowerCase();
+                      if (!hay.includes(q)) return false;
+                    }
+                    return true;
+                  })
+                  .sort((a, b) =>
+                    accSortAsc ? a.acceptedAt.localeCompare(b.acceptedAt) : b.acceptedAt.localeCompare(a.acceptedAt)
+                  )
+                  .map((a) => {
+                    const initials = ((a.firstName?.[0] || "U") + (a.lastName?.[0] || "")).toUpperCase();
+                    const fullName = `${a.firstName || ""} ${a.lastName || ""}`.trim() || a.email;
+                    const grpName = a.groupName || a.currentGroupName || "Investor Group";
+                    const grpRole = a.groupRole || "User";
+                    return (
+                      <tr key={a.id} className="group hover:bg-[var(--apple-hover)]">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#007AFF]/15 text-[10px] font-bold text-[#007AFF]">
+                              {initials}
+                            </div>
+                            <div>
+                              <div className="font-semibold">{fullName}</div>
+                              <div className="text-[10px] text-[var(--apple-text-muted)]">{a.email}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium">{grpName}</div>
+                          <div className="text-[10px] text-[var(--apple-text-muted)]">{grpRole}</div>
+                        </td>
+                        <td className="px-4 py-3 font-medium">{a.termsTitle}</td>
+                        <td className="px-4 py-3 tabular-nums text-[var(--apple-text-secondary)]">
+                          {formatDateTime(a.publishedAt || a.termsUpdatedAt || a.acceptedAt)}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums">{formatDateTime(a.acceptedAt)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <a
+                              href={`/api/settings?export=accepted-term-pdf&id=${encodeURIComponent(a.id)}`}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0066D6]"
+                              title="Download executed agreement PDF"
+                            >
+                              <Download className="h-3 w-3" /> PDF
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const rendered = renderNdaText(a.acceptedContent || a.termsContent || "", {
+                                  name: fullName,
+                                  title: a.jobTitle || "Authorized Representative",
+                                  company: a.company || "Investor Entity",
+                                  email: a.email,
+                                  date: formatDateShort(a.acceptedAt),
+                                });
+                                const win = window.open("", "_blank", "width=900,height=780");
+                                if (!win) return;
+                                win.document.write(
+                                  `<html><head><title>${a.termsTitle} - ${fullName}</title><style>body{font-family:system-ui,-apple-system,sans-serif;padding:40px;line-height:1.65;color:#111} .cert{background:#f5f7fa;border:1px solid #d0d7de;padding:16px;border-radius:10px;margin-bottom:24px;font-size:13px} pre{white-space:pre-wrap;font-family:inherit;font-size:13px}</style></head><body><div class="cert"><strong>Kleen Data Room — Executed Agreement Certificate</strong><br/>Agreement: ${a.termsTitle}<br/>Accepted By: ${fullName} (${a.email})<br/>Group: ${grpName} (${grpRole})<br/>Accepted On: ${formatDateTime(a.acceptedAt)}</div><pre dir="auto">${rendered.replace(/</g, "&lt;")}</pre><script>window.print();</script></body></html>`
+                                );
+                                win.document.close();
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border-strong)] px-2 py-1.5 text-[11px] hover:bg-[var(--apple-bg)]"
+                              title="Print / Save full bilingual Arabic + English PDF"
+                            >
+                              <Printer className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {(meta?.acceptances || []).length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-12 text-center text-[var(--apple-text-muted)]">
+                      No participants have accepted terms of access yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* 8. Watermarks */}
       {subTab === "watermarks" && (
         <div className="apple-card max-w-2xl space-y-5 p-6 text-xs">
@@ -892,6 +1190,43 @@ export function SettingsView({
                 </label>
               ))}
             </div>
+            {wmFields.includes("customText") && (
+              <div className="mt-3">
+                <label className="mb-1 block font-medium">Custom watermark text</label>
+                <div className="flex gap-2">
+                  <input
+                    value={wmCustomTextDraft}
+                    onChange={(e) => setWmCustomTextDraft(e.target.value)}
+                    placeholder="e.g., Strictly Confidential — Project Kleen"
+                    className="flex-1 rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateProjectFields({ watermarkCustomText: wmCustomTextDraft })}
+                    className="rounded-xl bg-[#007AFF] px-3 py-1.5 font-semibold text-white"
+                  >
+                    Save text
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-[var(--apple-border)] bg-white p-6 text-center text-zinc-700">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Live Watermark Preview</div>
+            <div
+              className="py-4 text-xs font-medium"
+              style={{
+                opacity: project.watermarkEnabled ? Math.max(0.15, project.watermarkOpacity / 100) : 0.1,
+                color: project.watermarkColor === "red" ? "#D92D20" : project.watermarkColor === "blue" ? "#007AFF" : "#52525B",
+                transform: project.watermarkPosition === "diagonal" ? "rotate(-12deg)" : "none",
+              }}
+            >
+              {wmFields.includes("projectName") && <div>{project.name}</div>}
+              {wmFields.includes("email") && <div>{user.email}</div>}
+              {wmFields.includes("fullName") && <div>{user.firstName} {user.lastName}</div>}
+              {wmFields.includes("customText") && wmCustomTextDraft && <div>{wmCustomTextDraft}</div>}
+            </div>
           </div>
         </div>
       )}
@@ -919,6 +1254,28 @@ export function SettingsView({
               />
             </label>
           ))}
+          <div className="space-y-3 rounded-xl border border-[var(--apple-border)] p-4">
+            <div>
+              <label className="mb-1 block font-medium">Allowed email domains (comma-separated)</label>
+              <input
+                value={allowedDomainsDraft}
+                onChange={(e) => setAllowedDomainsDraft(e.target.value)}
+                onBlur={() => updateProjectFields({ allowedDomains: allowedDomainsDraft })}
+                placeholder="e.g., kleen.sa, partner-capital.sa"
+                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block font-medium">Allowed IP addresses / CIDR ranges</label>
+              <input
+                value={allowedIpsDraft}
+                onChange={(e) => setAllowedIpsDraft(e.target.value)}
+                onBlur={() => updateProjectFields({ allowedIps: allowedIpsDraft })}
+                placeholder="e.g., 192.168.1.0/24"
+                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+              />
+            </div>
+          </div>
         </div>
       )}
 
@@ -982,8 +1339,30 @@ export function SettingsView({
           <div className="apple-card w-full max-w-md space-y-4 p-6 text-xs">
             <h3 className="text-base font-semibold">Lock project</h3>
             <p className="text-[var(--apple-text-secondary)]">
-              No changes are possible while locked. Active participants retain read access per permissions.
+              No changes, deletions, or uploads are possible. Active participants retain viewing permissions.
             </p>
+            <div>
+              <div className="mb-1.5 font-medium">Unlock rights (authorized administrators)</div>
+              <div className="space-y-1 rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-2.5">
+                {groups
+                  .filter((g) => g.role === "Administrator")
+                  .flatMap((g) => g.members || [])
+                  .map((adm) => (
+                    <label key={adm.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={unlockAdmins.includes(adm.email)}
+                        onChange={(e) =>
+                          setUnlockAdmins((prev) =>
+                            e.target.checked ? [...prev, adm.email] : prev.filter((em) => em !== adm.email)
+                          )
+                        }
+                      />
+                      {adm.firstName} {adm.lastName} ({adm.email})
+                    </label>
+                  ))}
+              </div>
+            </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setShowLockModal(false)} className="rounded-xl border border-[var(--apple-border)] px-4 py-2">
                 Cancel

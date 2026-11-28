@@ -386,4 +386,15 @@ function initSchema(db: DatabaseSyncType) {
   if (!cols.some((c) => c.name === "inviteToken")) {
     db.exec("ALTER TABLE project_participants ADD COLUMN inviteToken TEXT;");
   }
+
+  const accCols = db.prepare("PRAGMA table_info(terms_acceptances)").all() as Array<{ name: string }>;
+  if (!accCols.some((c) => c.name === "acceptedContent")) {
+    db.exec("ALTER TABLE terms_acceptances ADD COLUMN acceptedContent TEXT;");
+  }
+  if (!accCols.some((c) => c.name === "groupName")) {
+    db.exec("ALTER TABLE terms_acceptances ADD COLUMN groupName TEXT;");
+  }
+  if (!accCols.some((c) => c.name === "publishedAt")) {
+    db.exec("ALTER TABLE terms_acceptances ADD COLUMN publishedAt TEXT;");
+  }
 }

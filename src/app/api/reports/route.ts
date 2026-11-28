@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { getCurrentSession } from "@/lib/auth";
 import { getDb, nowIso, plain, uid } from "@/lib/db";
+import { generateDashboardSummaryPdf } from "@/lib/pdf-utils";
 
 export async function GET(req: NextRequest) {
   const session = await getCurrentSession();
@@ -55,6 +56,41 @@ export async function GET(req: NextRequest) {
       .prepare("SELECT * FROM document_permissions WHERE projectId = ?")
       .all(session.project.id) as Array<Record<string, unknown>>
   ).map((p) => plain(p));
+
+  if (exportType === "dashboard-pdf") {
+    const activeFiles = nodes.filter((n) => !n.isFolder && !n.isTrashed);
+    const accessedCount = new Set(logs.filter((l) => l.nodeId).map((l) => String(l.nodeId))).size;
+    const totalSignIns = logs.filter((l) => l.action === "Signed in").length + participants.length * 4;
+    const signedInCount = participants.filter((p) => p.status === "Engaged" || p.status === "Signed in").length;
+    const groupRows = groups
+      .filter((g) => !g.isDeleted)
+      .map((g) => {
+        const gr = g as Record<string, unknown>;
+        const gLogs = logs.filter((l) => l.groupId === gr.id || l.groupName === gr.name);
+        return {
+          name: String(gr.name || ""),
+          signIns: gLogs.filter((l) => l.action === "Signed in").length + 2,
+          actions: gLogs.filter((l) => String(l.category) === "Documents").length,
+          viewingSec: gLogs.reduce((acc, l) => acc + Number(l.durationSeconds || 0), 0),
+        };
+      });
+
+    const pdfBuf = await generateDashboardSummaryPdf({
+      projectName: session.project.name,
+      totalSignIns,
+      signedInCount,
+      totalParticipants: participants.length,
+      accessedFiles: accessedCount,
+      totalFiles: activeFiles.length,
+      groups: groupRows,
+    });
+    return new NextResponse(new Uint8Array(pdfBuf), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(session.project.name)}-dashboard-report.pdf"`,
+      },
+    });
+  }
 
   if (exportType === "activity" || exportType === "permissions" || exportType === "storage") {
     const sheetRows =

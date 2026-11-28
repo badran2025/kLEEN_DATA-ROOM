@@ -205,3 +205,156 @@ function wrapText(text: string, maxChars: number): string[] {
   if (current) lines.push(current);
   return lines;
 }
+
+export async function generateAcceptedTermsPdf(options: {
+  projectName: string;
+  termsTitle: string;
+  termsType: string;
+  acceptedByName: string;
+  acceptedByEmail: string;
+  company: string;
+  groupName: string;
+  groupRole: string;
+  publishedAt: string;
+  acceptedAt: string;
+  content: string;
+}): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  let page = doc.addPage([595.28, 841.89]);
+  let { width, height } = page.getSize();
+
+  const drawHeader = (pg: typeof page, pageNum: number) => {
+    pg.drawRectangle({ x: 36, y: height - 66, width: width - 72, height: 36, color: rgb(0.95, 0.96, 0.98) });
+    pg.drawText("KLEEN DATA ROOM  |  EXECUTED TERMS OF ACCESS RECORD", {
+      x: 48,
+      y: height - 52,
+      size: 10,
+      font: bold,
+      color: rgb(0.05, 0.45, 0.95),
+    });
+    pg.drawText(`Page ${pageNum}`, {
+      x: width - 85,
+      y: height - 52,
+      size: 9,
+      font,
+      color: rgb(0.45, 0.45, 0.5),
+    });
+  };
+
+  drawHeader(page, 1);
+
+  // Acceptance Certificate Box
+  page.drawRectangle({
+    x: 36,
+    y: height - 235,
+    width: width - 72,
+    height: 152,
+    color: rgb(0.98, 0.98, 0.99),
+    borderColor: rgb(0.84, 0.86, 0.9),
+    borderWidth: 1,
+  });
+
+  const safe = (v: string) => v.replace(/[^\x20-\x7E]/g, " ").trim() || "-";
+  const certRows: Array<[string, string]> = [
+    ["Agreement Title:", safe(options.termsTitle)],
+    ["Agreement Type:", safe(options.termsType)],
+    ["Data Room Project:", safe(options.projectName)],
+    ["Accepted By:", `${safe(options.acceptedByName)} (${safe(options.acceptedByEmail)})`],
+    ["Company / Group:", `${safe(options.company)}  |  ${safe(options.groupName)} (${safe(options.groupRole)})`],
+    ["Published On:", safe(options.publishedAt)],
+    ["Accepted On:", `${safe(options.acceptedAt)}  (Electronically Confirmed)`],
+  ];
+
+  let cy = height - 104;
+  for (const [k, v] of certRows) {
+    page.drawText(k, { x: 48, y: cy, size: 9.5, font: bold, color: rgb(0.25, 0.25, 0.28) });
+    page.drawText(v.slice(0, 74), { x: 165, y: cy, size: 9.5, font, color: rgb(0.1, 0.1, 0.12) });
+    cy -= 19;
+  }
+
+  let y = height - 262;
+  let pageCount = 1;
+  page.drawText("Full Agreement Text (English Reference):", {
+    x: 36,
+    y,
+    size: 11,
+    font: bold,
+    color: rgb(0.1, 0.1, 0.12),
+  });
+  y -= 20;
+
+  const paragraphs = options.content.split(/\r?\n/);
+  for (const rawP of paragraphs) {
+    const ascii = rawP.replace(/[^\x20-\x7E]/g, "").trim();
+    if (!ascii) {
+      if (rawP.trim().length > 0) continue; // skip non-ASCII-only lines for WinAnsi pdf-lib font
+      y -= 8;
+      continue;
+    }
+    const wrapped = wrapText(ascii, 88);
+    for (const line of wrapped) {
+      if (y < 52) {
+        pageCount++;
+        page = doc.addPage([595.28, 841.89]);
+        ({ width, height } = page.getSize());
+        drawHeader(page, pageCount);
+        y = height - 92;
+      }
+      page.drawText(line, { x: 36, y, size: 9.5, font, color: rgb(0.18, 0.18, 0.2) });
+      y -= 14;
+    }
+  }
+
+  return Buffer.from(await doc.save());
+}
+
+export async function generateDashboardSummaryPdf(options: {
+  projectName: string;
+  totalSignIns: number;
+  signedInCount: number;
+  totalParticipants: number;
+  accessedFiles: number;
+  totalFiles: number;
+  groups: Array<{ name: string; signIns: number; actions: number; viewingSec: number }>;
+}): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  const p1 = doc.addPage([841.89, 595.28]); // Landscape A4 slide 1
+  const { width, height } = p1.getSize();
+  p1.drawRectangle({ x: 0, y: height - 72, width, height: 72, color: rgb(0.05, 0.45, 0.95) });
+  p1.drawText(`KLEEN DATA ROOM — ACTIVITY REPORT (${options.projectName})`, {
+    x: 40,
+    y: height - 44,
+    size: 16,
+    font: bold,
+    color: rgb(1, 1, 1),
+  });
+
+  p1.drawText("Slide 1: Activity by Groups", { x: 40, y: height - 110, size: 14, font: bold, color: rgb(0.1, 0.1, 0.12) });
+  p1.drawText(
+    `Total Sign-ins: ${options.totalSignIns}   |   Signed-in Participants: ${options.signedInCount}/${options.totalParticipants}   |   Accessed Files: ${options.accessedFiles}/${options.totalFiles}`,
+    { x: 40, y: height - 135, size: 11, font, color: rgb(0.3, 0.3, 0.35) }
+  );
+
+  let rowY = height - 180;
+  p1.drawText("Group Name", { x: 40, y: rowY, size: 11, font: bold, color: rgb(0.1, 0.1, 0.12) });
+  p1.drawText("Sign-ins", { x: 340, y: rowY, size: 11, font: bold, color: rgb(0.1, 0.1, 0.12) });
+  p1.drawText("File Actions", { x: 470, y: rowY, size: 11, font: bold, color: rgb(0.1, 0.1, 0.12) });
+  p1.drawText("Viewing Time (min)", { x: 610, y: rowY, size: 11, font: bold, color: rgb(0.1, 0.1, 0.12) });
+  rowY -= 22;
+
+  for (const g of options.groups.slice(0, 12)) {
+    p1.drawText(g.name.replace(/[^\x20-\x7E]/g, " ").slice(0, 38), { x: 40, y: rowY, size: 10.5, font, color: rgb(0.2, 0.2, 0.24) });
+    p1.drawText(String(g.signIns), { x: 340, y: rowY, size: 10.5, font, color: rgb(0.2, 0.2, 0.24) });
+    p1.drawText(String(g.actions), { x: 470, y: rowY, size: 10.5, font, color: rgb(0.2, 0.2, 0.24) });
+    p1.drawText(String(Math.round(g.viewingSec / 60)), { x: 610, y: rowY, size: 10.5, font, color: rgb(0.2, 0.2, 0.24) });
+    rowY -= 22;
+  }
+
+  return Buffer.from(await doc.save());
+}

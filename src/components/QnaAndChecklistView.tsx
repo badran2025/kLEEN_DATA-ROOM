@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Plus, MessageCircleQuestion, CheckSquare, X, Send, Upload } from "lucide-react";
+import { Plus, MessageCircleQuestion, CheckSquare, X, Send, Upload, Search, Star } from "lucide-react";
 import type { DriveNodeDto, GroupDto } from "@/lib/types";
 import { formatDateShort } from "@/lib/format";
 
@@ -25,8 +25,11 @@ interface QnaRow {
 export function QnaView({ isAdmin }: { isAdmin: boolean }) {
   const [questions, setQuestions] = useState<QnaRow[]>([]);
   const [filterMode, setFilterMode] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedQ, setSelectedQ] = useState<QnaRow | null>(null);
   const [answerDraft, setAnswerDraft] = useState("");
+  const [statusDraft, setStatusDraft] = useState("Answered");
+  const [faqDraft, setFaqDraft] = useState(false);
   const [showAskModal, setShowAskModal] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -66,13 +69,25 @@ export function QnaView({ isAdmin }: { isAdmin: boolean }) {
     await fetch("/api/qna", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: selectedQ.id, answer: answerDraft, status: "Answered" }),
+      body: JSON.stringify({
+        id: selectedQ.id,
+        answer: answerDraft,
+        status: answerDraft.trim() ? statusDraft : statusDraft,
+        isFaq: faqDraft,
+      }),
     });
     setSelectedQ(null);
     await loadQna();
   }
 
   const visible = questions.filter((q) => {
+    const qText = searchQuery.trim().toLowerCase();
+    if (
+      qText &&
+      !`${q.code} ${q.subject} ${q.body} ${q.category}`.toLowerCase().includes(qText)
+    ) {
+      return false;
+    }
     if (filterMode === "All") return true;
     if (filterMode === "FAQ") return q.isFaq;
     if (filterMode === "Unanswered") return q.status !== "Answered" && q.status !== "Closed";
@@ -88,13 +103,24 @@ export function QnaView({ isAdmin }: { isAdmin: boolean }) {
             Structured investor questions and approved answers linked to mirrored Drive documents.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowAskModal(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-3.5 py-2 text-xs font-semibold text-white"
-        >
-          <Plus className="h-3.5 w-3.5" /> Ask question
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-[var(--apple-text-muted)]" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search questions..."
+              className="w-48 rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] py-1.5 pr-3 pl-8 text-xs outline-none"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAskModal(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-3.5 py-2 text-xs font-semibold text-white"
+          >
+            <Plus className="h-3.5 w-3.5" /> Ask question
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
@@ -138,6 +164,8 @@ export function QnaView({ isAdmin }: { isAdmin: boolean }) {
                   onClick={() => {
                     setSelectedQ(q);
                     setAnswerDraft(q.answer || "");
+                    setStatusDraft(q.answer ? q.status : "Answered");
+                    setFaqDraft(Boolean(q.isFaq));
                   }}
                   className="cursor-pointer hover:bg-[var(--apple-hover)]"
                 >
@@ -205,13 +233,38 @@ export function QnaView({ isAdmin }: { isAdmin: boolean }) {
               <div className="border-t border-[var(--apple-border)] pt-4">
                 <label className="mb-1.5 block font-semibold">Official Response</label>
                 {isAdmin ? (
-                  <textarea
-                    rows={5}
-                    value={answerDraft}
-                    onChange={(e) => setAnswerDraft(e.target.value)}
-                    placeholder="Write official answer..."
-                    className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-3 outline-none"
-                  />
+                  <div className="space-y-3">
+                    <textarea
+                      rows={5}
+                      value={answerDraft}
+                      onChange={(e) => setAnswerDraft(e.target.value)}
+                      placeholder="Write official answer..."
+                      className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-3 outline-none"
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <select
+                        value={statusDraft}
+                        onChange={(e) => setStatusDraft(e.target.value)}
+                        className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-1.5"
+                      >
+                        <option value="Submitted">Submitted</option>
+                        <option value="Assigned">Assigned</option>
+                        <option value="Answered">Answered</option>
+                        <option value="Closed">Closed</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setFaqDraft((v) => !v)}
+                        className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 font-medium ${
+                          faqDraft
+                            ? "border-amber-500/40 bg-amber-500/15 text-amber-500"
+                            : "border-[var(--apple-border-strong)]"
+                        }`}
+                      >
+                        <Star className="h-3.5 w-3.5" /> {faqDraft ? "Marked as FAQ" : "Mark as FAQ"}
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <div className="rounded-xl bg-[var(--apple-bg)] p-3">
                     {selectedQ.answer || "Awaiting administrator response."}
@@ -401,7 +454,33 @@ export function ChecklistView({ isAdmin }: { isAdmin: boolean; groups: GroupDto[
                 <td className="px-4 py-3">{item.category}</td>
                 <td className="px-4 py-3 font-medium">{item.title}</td>
                 <td className="px-4 py-3 text-[#007AFF]">
-                  {item.nodeName ? `${item.nodeIndex} ${item.nodeName}` : "—"}
+                  {isAdmin ? (
+                    <select
+                      value={item.linkedNodeId || ""}
+                      onChange={async (e) => {
+                        await fetch("/api/checklist", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            id: item.id,
+                            status: item.status,
+                            linkedNodeId: e.target.value || null,
+                          }),
+                        });
+                        await loadAll();
+                      }}
+                      className="max-w-[240px] rounded-lg border border-[var(--apple-border)] bg-[var(--apple-bg)] px-2 py-1 text-[11px] text-[var(--apple-text)]"
+                    >
+                      <option value="">Not linked</option>
+                      {nodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.dotIndex} {n.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span>{item.nodeName ? `${item.nodeIndex} ${item.nodeName}` : "—"}</span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   <select

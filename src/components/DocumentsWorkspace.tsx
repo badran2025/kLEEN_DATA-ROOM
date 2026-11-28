@@ -481,6 +481,7 @@ export function DocumentsWorkspace({
                 <th className="px-4 py-3">Visits</th>
                 <th className="px-4 py-3">Created on</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--apple-border)]">
@@ -509,11 +510,34 @@ export function DocumentsWorkspace({
                       {l.enabled ? "Active" : "Paused"}
                     </button>
                   </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const shareUrl = `${window.location.origin}/share/${l.token}`;
+                          navigator.clipboard?.writeText(shareUrl);
+                          showToast("External link copied");
+                        }}
+                        className="rounded-lg border border-[var(--apple-border-strong)] px-2.5 py-1 text-[11px] font-medium hover:bg-[var(--apple-bg)]"
+                      >
+                        Copy link
+                      </button>
+                      <a
+                        href={`/share/${l.token}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-2.5 py-1 text-[11px] font-medium text-white hover:bg-[#0066D6]"
+                      >
+                        Open <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {extLinks.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-[var(--apple-text-muted)]">
+                  <td colSpan={7} className="px-4 py-12 text-center text-[var(--apple-text-muted)]">
                     No external links created yet. Use a document&apos;s Share menu in All Documents to create one.
                   </td>
                 </tr>
@@ -558,14 +582,23 @@ export function DocumentsWorkspace({
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Signers</th>
                   <th className="px-4 py-3">Created on</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--apple-border)]">
                 {signatures.map((s) => (
-                  <tr key={s.id}>
+                  <tr key={s.id} className="hover:bg-[var(--apple-hover)]">
                     <td className="px-4 py-3 font-medium">{s.title}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[10px] font-semibold text-amber-500">
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                          s.status === "Signed"
+                            ? "bg-emerald-500/15 text-emerald-500"
+                            : s.status === "Declined"
+                              ? "bg-red-500/15 text-red-500"
+                              : "bg-amber-500/15 text-amber-500"
+                        }`}
+                      >
                         {s.status}
                       </span>
                     </td>
@@ -573,6 +606,57 @@ export function DocumentsWorkspace({
                       {(JSON.parse(s.signersJson || "[]") as string[]).join(", ")}
                     </td>
                     <td className="px-4 py-3 tabular-nums">{formatDateShort(s.createdAt)}</td>
+                    <td className="px-4 py-3 text-right">
+                      {s.status === "Pending" ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await fetch("/api/external-links", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "update-signature", id: s.id, status: "Signed" }),
+                              });
+                              await loadSecondaryTabs();
+                              showToast(`Marked "${s.title}" as Signed`);
+                            }}
+                            className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-500 hover:bg-emerald-500/25"
+                          >
+                            Sign
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await fetch("/api/external-links", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "update-signature", id: s.id, status: "Declined" }),
+                              });
+                              await loadSecondaryTabs();
+                              showToast(`Marked "${s.title}" as Declined`);
+                            }}
+                            className="rounded-lg bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold text-red-500 hover:bg-red-500/25"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await fetch("/api/external-links", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "update-signature", id: s.id, status: "Pending" }),
+                            });
+                            await loadSecondaryTabs();
+                          }}
+                          className="rounded-lg border border-[var(--apple-border)] px-2.5 py-1 text-[11px] text-[var(--apple-text-muted)] hover:bg-[var(--apple-bg)]"
+                        >
+                          Reopen
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1000,6 +1084,36 @@ export function DocumentsWorkspace({
 
         {/* Right Finder-Style Documents Table */}
         <div className="apple-card relative flex flex-col overflow-hidden">
+          {selectedIds.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--apple-border)] bg-[var(--apple-selected)] px-4 py-2 text-xs">
+              <div className="flex items-center gap-2 font-semibold text-[#007AFF]">
+                <span>Selected: {selectedIds.size}</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-[11px] font-medium text-[var(--apple-text-secondary)] hover:text-[var(--apple-text)]"
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleBulkDownload}
+                  className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-3 py-1 font-medium text-white hover:bg-[#0066D6]"
+                >
+                  <Download className="h-3 w-3" /> Download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleFavorite(Array.from(selectedIds))}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-1 font-medium hover:bg-[var(--apple-hover)]"
+                >
+                  <Star className="h-3 w-3" /> Toggle favorites
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-auto">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 z-10 border-b border-[var(--apple-border)] bg-[var(--apple-surface)] text-[11px] font-semibold text-[var(--apple-text-secondary)]">
@@ -1304,6 +1418,18 @@ export function DocumentsWorkspace({
             >
               <Star className="h-3.5 w-3.5" /> {contextNode.isFavorite ? "Remove from Favorites" : "Add to Favorites"}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                const internalUrl = `${window.location.origin}/?doc=${contextNode.id}`;
+                navigator.clipboard?.writeText(internalUrl);
+                setContextNode(null);
+                showToast("Internal document link copied");
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+            >
+              <Link2 className="h-3.5 w-3.5" /> Copy internal link
+            </button>
             {isTrueAdmin && !contextNode.isFolder && (
               <>
                 <button
@@ -1314,7 +1440,7 @@ export function DocumentsWorkspace({
                   }}
                   className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
                 >
-                  <Link2 className="h-3.5 w-3.5" /> Create external link
+                  <ExternalLink className="h-3.5 w-3.5" /> Create external sharing link
                 </button>
                 <button
                   type="button"

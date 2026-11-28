@@ -121,13 +121,33 @@ export function ReportsView({
     });
   }, [data, periodDays, reportOn, categoryFilter, authorFilter]);
 
+  const scopedFolderDriveIds = useMemo(() => {
+    if (!data || !selectedFolderId) return null;
+    const rootFolder = data.nodes.find((n) => n.id === selectedFolderId);
+    if (!rootFolder) return null;
+    const set = new Set<string>([rootFolder.driveFileId]);
+    let added = true;
+    while (added) {
+      added = false;
+      for (const n of data.nodes) {
+        if (n.isFolder && n.parentDriveId && set.has(n.parentDriveId) && !set.has(n.driveFileId)) {
+          set.add(n.driveFileId);
+          added = true;
+        }
+      }
+    }
+    return set;
+  }, [data, selectedFolderId]);
+
   const fileMetrics = useMemo(() => {
     if (!data) return [];
-    const files = data.nodes.filter((n) => !n.isFolder && !n.isTrashed);
+    const files = data.nodes.filter(
+      (n) => !n.isFolder && !n.isTrashed && (!scopedFolderDriveIds || (n.parentDriveId ? scopedFolderDriveIds.has(n.parentDriveId) : false))
+    );
     return files
       .map((f) => {
         const fLogs = data.logs.filter((l) => l.nodeId === f.id);
-        const views = fLogs.filter((l) => l.action.includes("viewed")).length;
+        const views = fLogs.filter((l) => l.action.toLowerCase().includes("view")).length;
         const timeSec = fLogs.reduce((acc, l) => acc + (l.durationSeconds || 0), 0);
         const lastAt = fLogs[0]?.createdAt || f.driveModifiedAt;
         return { file: f, views, timeSec, lastAt };
@@ -139,7 +159,45 @@ export function ReportsView({
             ? b.views - a.views
             : b.lastAt.localeCompare(a.lastAt)
       );
-  }, [data, topSortBy]);
+  }, [data, topSortBy, scopedFolderDriveIds]);
+
+  const overviewAnalytics = useMemo(() => {
+    const totalTimeSec = fileMetrics.reduce((acc, m) => acc + m.timeSec, 0);
+    const totalViews = fileMetrics.reduce((acc, m) => acc + m.views, 0);
+    const scopedNodeIds = new Set(fileMetrics.map((m) => m.file.id));
+    const scopedLogs = (data?.logs || []).filter((l) => l.nodeId && scopedNodeIds.has(l.nodeId));
+    const engagedUsers = new Set(scopedLogs.map((l) => l.userId).filter(Boolean)).size;
+    const avgTimeSec = totalViews > 0 ? Math.round(totalTimeSec / totalViews) : 0;
+
+    const days: Array<{ label: string; iso: string; timeSec: number; views: number }> = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const iso = d.toISOString().slice(0, 10);
+      const dayLogs = scopedLogs.filter((l) => l.createdAt.slice(0, 10) === iso);
+      days.push({
+        label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+        iso,
+        timeSec: dayLogs.reduce((acc, l) => acc + (l.durationSeconds || 0), 0),
+        views: dayLogs.length,
+      });
+    }
+    const maxSec = Math.max(1, ...days.map((d) => d.timeSec));
+    return { totalTimeSec, avgTimeSec, totalViews, engagedUsers, days, maxSec };
+  }, [data, fileMetrics]);
+
+  const storageByCategory = useMemo(() => {
+    if (!data) return [];
+    const map = new Map<string, { category: string; count: number; bytes: number }>();
+    for (const n of data.nodes) {
+      if (n.isFolder || n.isTrashed) continue;
+      const cat = n.category || "Other";
+      const cur = map.get(cat) || { category: cat, count: 0, bytes: 0 };
+      cur.count += 1;
+      cur.bytes += n.sizeBytes || 0;
+      map.set(cat, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.bytes - a.bytes);
+  }, [data]);
 
   async function createSub(e: React.FormEvent) {
     e.preventDefault();
@@ -437,6 +495,67 @@ export function ReportsView({
               </table>
             </div>
           </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="apple-card p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Summary</h3>
+                <span className="text-[11px] text-[var(--apple-text-muted)]">
+                  {selectedFolderId ? "Selected folder scope" : "All mirrored documents"} ({fileMetrics.length} files)
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/50 p-3">
+                  <div className="text-[11px] text-[var(--apple-text-muted)]">Total viewing time</div>
+                  <div className="mt-1 text-base font-semibold tabular-nums">
+                    {formatDuration(overviewAnalytics.totalTimeSec)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/50 p-3">
+                  <div className="text-[11px] text-[var(--apple-text-muted)]">Avg. viewing time</div>
+                  <div className="mt-1 text-base font-semibold tabular-nums">
+                    {formatDuration(overviewAnalytics.avgTimeSec)}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/50 p-3">
+                  <div className="text-[11px] text-[var(--apple-text-muted)]">Total views</div>
+                  <div className="mt-1 text-base font-semibold tabular-nums">{overviewAnalytics.totalViews}</div>
+                </div>
+                <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/50 p-3">
+                  <div className="text-[11px] text-[var(--apple-text-muted)]">Participants engaged</div>
+                  <div className="mt-1 text-base font-semibold tabular-nums">{overviewAnalytics.engagedUsers}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="apple-card p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Dynamics of viewing time</h3>
+                <span className="text-[11px] text-[var(--apple-text-muted)]">Last 14 days</span>
+              </div>
+              <div className="flex h-28 items-end gap-1.5 pt-2">
+                {overviewAnalytics.days.map((d) => {
+                  const pct = d.timeSec > 0 ? Math.max(8, Math.round((d.timeSec / overviewAnalytics.maxSec) * 100)) : 4;
+                  return (
+                    <div key={d.iso} className="group flex flex-1 flex-col items-center gap-1">
+                      <div className="flex h-20 w-full items-end">
+                        <div
+                          title={`${d.label}: ${formatDuration(d.timeSec)} (${d.views} views)`}
+                          style={{ height: `${pct}%` }}
+                          className={`w-full rounded-t-md transition ${
+                            d.timeSec > 0 ? "bg-[#007AFF] group-hover:bg-[#0A84FF]" : "bg-[var(--apple-border)]"
+                          }`}
+                        />
+                      </div>
+                      <span className="hidden text-[9px] text-[var(--apple-text-muted)] sm:block">
+                        {d.iso.slice(8)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
       ) : subTab === "engagement-matrix" ? (
         <div className="space-y-3">
@@ -545,6 +664,20 @@ export function ReportsView({
               >
                 {u}
               </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {storageByCategory.map((cat) => (
+              <div key={cat.category} className="apple-card p-4 text-xs">
+                <div className="text-[11px] font-medium text-[var(--apple-text-muted)]">{cat.category}</div>
+                <div className="mt-1 text-base font-semibold tabular-nums">
+                  {storageUnit === "GB"
+                    ? `${(cat.bytes / (1024 * 1024 * 1024)).toFixed(3)} GB`
+                    : `${(cat.bytes / (1024 * 1024)).toFixed(2)} MB`}
+                </div>
+                <div className="mt-0.5 text-[11px] text-[var(--apple-text-secondary)]">{cat.count} file(s)</div>
+              </div>
             ))}
           </div>
 
