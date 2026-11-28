@@ -28,9 +28,13 @@ import {
   X,
   ChevronsDownUp,
   Shield,
+  BarChart3,
+  Tag,
+  Plus,
+  UserPlus,
 } from "lucide-react";
 import type { DriveNodeDto, GroupDto, ProjectDto, UserDto } from "@/lib/types";
-import { FILE_TYPE_CATEGORIES, formatBytes, formatDateShort } from "@/lib/format";
+import { compareDotIndex, FILE_TYPE_CATEGORIES, formatBytes, formatDateShort, formatDateTime } from "@/lib/format";
 import { canDownloadOriginal, canDownloadPdf, type PermissionLevel } from "@/lib/permissions";
 import { KleenViewer } from "./KleenViewer";
 
@@ -136,6 +140,12 @@ export function DocumentsWorkspace({
   const [viewAsSearch, setViewAsSearch] = useState("");
   const [viewAsTarget, setViewAsTarget] = useState<string | null>(null);
   const [contextNode, setContextNode] = useState<DriveNodeDto | null>(null);
+  const [contextAnchor, setContextAnchor] = useState<{ top: number; right: number; openUp: boolean } | null>(null);
+  const [contextSub, setContextSub] = useState<"download" | "share" | "reports" | "add" | null>(null);
+  const [availableLabels, setAvailableLabels] = useState<Array<{ id: string; groupName: string; values: string[] }>>([]);
+  const [labelTargetNode, setLabelTargetNode] = useState<DriveNodeDto | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(project.lastSyncedAt || null);
+  const [bgSyncing, setBgSyncing] = useState(false);
 
   // Sub-tab data
   const [allNotes, setAllNotes] = useState<NoteRow[]>([]);
@@ -151,14 +161,37 @@ export function DocumentsWorkspace({
     setTimeout(() => setToast(null), 3200);
   }
 
-  async function loadDocuments() {
-    setLoading(true);
+  async function loadDocuments(silent = false) {
+    if (!silent) setLoading(true);
     const res = await fetch("/api/documents");
     if (res.ok) {
       const data = await res.json();
-      setNodes(data.nodes || []);
+      const loadedNodes: DriveNodeDto[] = data.nodes || [];
+      setNodes(loadedNodes);
+      if (Array.isArray(data.availableLabels)) setAvailableLabels(data.availableLabels);
+      if (data.syncInfo) {
+        if (data.syncInfo.lastSyncedAt) setLastSyncAt(data.syncInfo.lastSyncedAt);
+        setBgSyncing(Boolean(data.syncInfo.syncingNow));
+      }
+      if (!silent && typeof window !== "undefined") {
+        const sp = new URLSearchParams(window.location.search);
+        const docId = sp.get("doc");
+        const folderId = sp.get("folder");
+        if (folderId) {
+          setCurrentFolderDriveId(folderId);
+        } else if (docId) {
+          const found = loadedNodes.find((n) => n.id === docId);
+          if (found) {
+            if (found.isFolder) setCurrentFolderDriveId(found.driveFileId);
+            else {
+              if (found.parentDriveId) setCurrentFolderDriveId(found.parentDriveId);
+              setViewerNode(found);
+            }
+          }
+        }
+      }
     }
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   async function loadSecondaryTabs() {
@@ -178,6 +211,59 @@ export function DocumentsWorkspace({
     loadDocuments();
     loadSecondaryTabs();
   }, [project.id]);
+
+  // Background auto-sync polling so Drive updates appear automatically without manual Sync clicks
+  useEffect(() => {
+    if (project.driveAuthMode === "demo" || !project.driveRootFolderId) return;
+    let mounted = true;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch("/api/drive/sync");
+        if (!res.ok || !mounted) return;
+        const info = await res.json();
+        setBgSyncing(Boolean(info.syncingNow));
+        if (info.lastSyncedAt && info.lastSyncedAt !== lastSyncAt) {
+          setLastSyncAt(info.lastSyncedAt);
+          await loadDocuments(true);
+        }
+      } catch {
+        // Silent background check
+      }
+    }, 25000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [project.id, project.driveAuthMode, project.driveRootFolderId, lastSyncAt]);
+
+  async function downloadNodeDirect(node: DriveNodeDto, format: "pdf" | "original" = "pdf") {
+    if (node.isFolder) {
+      const res = await fetch("/api/documents/bulk-download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodeIds: [node.id], format }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Download blocked by group permissions");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${node.name}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Downloaded "${node.name}.zip"`);
+      return;
+    }
+
+    const a = document.createElement("a");
+    a.href = `/api/documents/${node.id}/download?format=${format}`;
+    a.download = node.name;
+    a.click();
+  }
 
   async function handleSyncDrive() {
     setSyncing(true);
@@ -291,7 +377,13 @@ export function DocumentsWorkspace({
     return chain;
   }, [currentFolder, nodeByDriveId]);
 
-  const folderTree = useMemo(() => nodes.filter((n) => n.isFolder), [nodes]);
+  const folderTree = useMemo(
+    () =>
+      nodes
+        .filter((n) => n.isFolder)
+        .sort((a, b) => compareDotIndex(a.dotIndex, b.dotIndex)),
+    [nodes]
+  );
 
   const displayedRows = useMemo(() => {
     let list = nodes;
@@ -330,7 +422,9 @@ export function DocumentsWorkspace({
 
     return [...list].sort((a, b) => {
       if (foldersFirst && a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
-      return a.dotIndex.localeCompare(b.dotIndex, undefined, { numeric: true });
+      const cmp = compareDotIndex(a.dotIndex, b.dotIndex);
+      if (cmp !== 0) return cmp;
+      return a.name.localeCompare(b.name, undefined, { numeric: true });
     });
   }, [nodes, subTab, currentFolderDriveId, searchText, selectedExts, addedFilter, viewedFilter, foldersFirst]);
 
@@ -711,10 +805,18 @@ export function DocumentsWorkspace({
           ))}
         </div>
 
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--apple-border)] bg-[var(--apple-surface)] px-2.5 py-1 text-[11px] text-[var(--apple-text-secondary)]">
-          <Shield className="h-3 w-3 text-[#007AFF]" />
-          Read-Only Google Drive Mirror • {project.driveRootFolderName}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {project.driveAuthMode !== "demo" && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-500">
+              <RefreshCw className={`h-3 w-3 ${bgSyncing || syncing ? "animate-spin" : ""}`} />
+              Auto-Sync ON{lastSyncAt ? ` • ${formatDateTime(lastSyncAt)}` : ""}
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--apple-border)] bg-[var(--apple-surface)] px-2.5 py-1 text-[11px] text-[var(--apple-text-secondary)]">
+            <Shield className="h-3 w-3 text-[#007AFF]" />
+            Read-Only Google Drive Mirror • {project.driveRootFolderName}
+          </span>
+        </div>
       </div>
 
       {/* Main Action & Search Toolbar */}
@@ -1136,7 +1238,7 @@ export function DocumentsWorkspace({
                   {visibleCols.viewedOn && <th className="w-28 px-3 py-2.5">Viewed on</th>}
                   {visibleCols.permission && <th className="w-24 px-3 py-2.5">Permission</th>}
                   {visibleCols.id && <th className="w-28 px-3 py-2.5">Drive ID</th>}
-                  <th className="w-12 px-2 py-2.5 text-right">
+                  <th className="w-20 px-2 py-2.5 text-right">
                     <div className="relative inline-block">
                       <button
                         type="button"
@@ -1328,13 +1430,48 @@ export function DocumentsWorkspace({
                           </td>
                         )}
                         <td className="px-2 py-2.5 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setContextNode(contextNode?.id === row.id ? null : row)}
-                            className="rounded-lg p-1 text-[var(--apple-text-muted)] opacity-70 transition hover:bg-[var(--apple-bg)] hover:text-[var(--apple-text)] group-hover:opacity-100"
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-1">
+                            {(canDownloadPdf(row.effectivePermission as PermissionLevel) ||
+                              canDownloadOriginal(row.effectivePermission as PermissionLevel)) && (
+                              <button
+                                type="button"
+                                title={row.isFolder ? "Download folder (.zip)" : "Download"}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const fmt = canDownloadPdf(row.effectivePermission as PermissionLevel) ? "pdf" : "original";
+                                  void downloadNodeDirect(row, fmt);
+                                }}
+                                className="rounded-lg p-1.5 text-[var(--apple-text-muted)] opacity-75 transition hover:bg-[#007AFF]/15 hover:text-[#007AFF] group-hover:opacity-100"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              title="More actions"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (contextNode?.id === row.id) {
+                                  setContextNode(null);
+                                  setContextAnchor(null);
+                                  setContextSub(null);
+                                  return;
+                                }
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const openUp = window.innerHeight - rect.bottom < 340;
+                                setContextAnchor({
+                                  top: openUp ? Math.max(16, rect.top - 8) : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUp,
+                                });
+                                setContextSub(null);
+                                setContextNode(row);
+                              }}
+                              className="rounded-lg p-1.5 text-[var(--apple-text-muted)] opacity-75 transition hover:bg-[var(--apple-bg)] hover:text-[var(--apple-text)] group-hover:opacity-100"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1346,24 +1483,87 @@ export function DocumentsWorkspace({
         </div>
       </div>
 
-      {/* Row Context Action Modal / Popover */}
-      {contextNode && (
+      {/* Anchored Row Context Action Menu (iDeals-style) */}
+      {contextNode && contextAnchor && (
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs"
-          onClick={() => setContextNode(null)}
+          className="fixed inset-0 z-50"
+          onClick={() => {
+            setContextNode(null);
+            setContextAnchor(null);
+            setContextSub(null);
+          }}
         >
           <div
-            className="apple-card w-full max-w-xs p-2 text-xs"
+            style={{
+              top: contextAnchor.openUp ? undefined : `${contextAnchor.top}px`,
+              bottom: contextAnchor.openUp ? `${window.innerHeight - contextAnchor.top}px` : undefined,
+              right: `${contextAnchor.right}px`,
+            }}
+            className="apple-glass fixed z-50 w-60 rounded-2xl border border-[var(--apple-border-strong)] p-1.5 text-xs shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-1.5 flex items-center justify-between border-b border-[var(--apple-border)] px-2.5 py-2">
-              <span dir="auto" className="truncate font-semibold">
+            <div className="mb-1 flex items-center justify-between border-b border-[var(--apple-border)] px-2.5 py-1.5">
+              <span dir="auto" className="truncate font-semibold text-[var(--apple-text)]">
                 {contextNode.dotIndex} {contextNode.name}
               </span>
-              <button type="button" onClick={() => setContextNode(null)}>
-                <X className="h-3.5 w-3.5" />
+              <button
+                type="button"
+                onClick={() => {
+                  setContextNode(null);
+                  setContextAnchor(null);
+                }}
+              >
+                <X className="h-3.5 w-3.5 text-[var(--apple-text-muted)]" />
               </button>
             </div>
+
+            {/* Download submenu */}
+            {(canDownloadPdf(contextNode.effectivePermission as PermissionLevel) ||
+              canDownloadOriginal(contextNode.effectivePermission as PermissionLevel)) && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setContextSub((s) => (s === "download" ? null : "download"))}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <Download className="h-3.5 w-3.5" /> Download
+                  </span>
+                  <ChevronRight className={`h-3.5 w-3.5 transition ${contextSub === "download" ? "rotate-90" : ""}`} />
+                </button>
+                {contextSub === "download" && (
+                  <div className="ml-4 space-y-0.5 border-l border-[var(--apple-border)] pl-2 pb-1">
+                    {canDownloadPdf(contextNode.effectivePermission as PermissionLevel) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = contextNode;
+                          setContextNode(null);
+                          void downloadNodeDirect(target, "pdf");
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                      >
+                        {contextNode.isFolder ? "Folder archive (.zip)" : "PDF (with watermark)"}
+                      </button>
+                    )}
+                    {!contextNode.isFolder && canDownloadOriginal(contextNode.effectivePermission as PermissionLevel) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = contextNode;
+                          setContextNode(null);
+                          void downloadNodeDirect(target, "original");
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                      >
+                        Original format
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {!contextNode.isFolder && (
               <button
                 type="button"
@@ -1377,104 +1577,279 @@ export function DocumentsWorkspace({
                 <Eye className="h-3.5 w-3.5 text-[#007AFF]" /> View in Kleen Viewer
               </button>
             )}
-            {canDownloadPdf(contextNode.effectivePermission as PermissionLevel) && (
-              <a
-                href={
-                  contextNode.isFolder
-                    ? "#"
-                    : `/api/documents/${contextNode.id}/download?format=pdf`
-                }
-                onClick={(e) => {
-                  if (contextNode.isFolder) {
-                    e.preventDefault();
-                    setSelectedIds(new Set([contextNode.id]));
-                    setContextNode(null);
-                    handleBulkDownload();
-                  } else {
-                    setContextNode(null);
-                  }
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
-              >
-                <Download className="h-3.5 w-3.5" /> Download Watermarked PDF
-              </a>
-            )}
-            {!contextNode.isFolder && canDownloadOriginal(contextNode.effectivePermission as PermissionLevel) && (
-              <a
-                href={`/api/documents/${contextNode.id}/download?format=original`}
-                onClick={() => setContextNode(null)}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
-              >
-                <Download className="h-3.5 w-3.5" /> Download Original File
-              </a>
-            )}
+
             <button
               type="button"
               onClick={() => {
-                toggleFavorite([contextNode.id]);
+                const url = contextNode.isFolder
+                  ? `${window.location.origin}/?folder=${contextNode.driveFileId}`
+                  : `${window.location.origin}/?doc=${contextNode.id}`;
+                window.open(url, "_blank", "noopener,noreferrer");
                 setContextNode(null);
               }}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
             >
-              <Star className="h-3.5 w-3.5" /> {contextNode.isFavorite ? "Remove from Favorites" : "Add to Favorites"}
+              <ExternalLink className="h-3.5 w-3.5" /> Open in new browser tab
             </button>
+
+            <div className="my-1 border-t border-[var(--apple-border)]" />
+
             <button
               type="button"
               onClick={() => {
-                const internalUrl = `${window.location.origin}/?doc=${contextNode.id}`;
+                const internalUrl = contextNode.isFolder
+                  ? `${window.location.origin}/?folder=${contextNode.driveFileId}`
+                  : `${window.location.origin}/?doc=${contextNode.id}`;
                 navigator.clipboard?.writeText(internalUrl);
                 setContextNode(null);
-                showToast("Internal document link copied");
+                showToast("Link copied to clipboard");
               }}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
             >
-              <Link2 className="h-3.5 w-3.5" /> Copy internal link
+              <Link2 className="h-3.5 w-3.5" /> Copy link
             </button>
-            {isTrueAdmin && !contextNode.isFolder && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    createExternalLink(contextNode.id);
-                    setContextNode(null);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" /> Create external sharing link
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    requestSignature(contextNode);
-                    setContextNode(null);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
-                >
-                  <FileSignature className="h-3.5 w-3.5" /> Request signature
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setContextNode(null);
-                    onNavigateTab("permissions");
-                  }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
-                >
-                  <Shield className="h-3.5 w-3.5" /> Manage permissions
-                </button>
-              </>
-            )}
+
             {isTrueAdmin && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setContextSub((s) => (s === "share" ? null : "share"))}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <UserPlus className="h-3.5 w-3.5" /> Share
+                  </span>
+                  <ChevronRight className={`h-3.5 w-3.5 transition ${contextSub === "share" ? "rotate-90" : ""}`} />
+                </button>
+                {contextSub === "share" && (
+                  <div className="ml-4 space-y-0.5 border-l border-[var(--apple-border)] pl-2 pb-1">
+                    {!contextNode.isFolder && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          createExternalLink(contextNode.id);
+                          setContextNode(null);
+                        }}
+                        className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                      >
+                        Create external sharing link
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContextNode(null);
+                        onNavigateTab("permissions");
+                      }}
+                      className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                    >
+                      Manage group permissions
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setContextSub((s) => (s === "reports" ? null : "reports"))}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <BarChart3 className="h-3.5 w-3.5" /> View reports
+                  </span>
+                  <ChevronRight className={`h-3.5 w-3.5 transition ${contextSub === "reports" ? "rotate-90" : ""}`} />
+                </button>
+                {contextSub === "reports" && (
+                  <div className="ml-4 space-y-0.5 border-l border-[var(--apple-border)] pl-2 pb-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContextNode(null);
+                        onNavigateTab("reports:documents-overview");
+                      }}
+                      className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                    >
+                      Documents overview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContextNode(null);
+                        onNavigateTab("reports:activity-log");
+                      }}
+                      className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                    >
+                      Activity log
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="my-1 border-t border-[var(--apple-border)]" />
+
+            <div>
               <button
                 type="button"
-                onClick={() => {
-                  setContextNode(null);
-                  onNavigateTab("reports:activity-log");
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+                onClick={() => setContextSub((s) => (s === "add" ? null : "add"))}
+                className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
               >
-                <MessageSquareText className="h-3.5 w-3.5" /> View reports (Activity log)
+                <span className="flex items-center gap-2">
+                  <Plus className="h-3.5 w-3.5 text-emerald-500" /> Add
+                </span>
+                <ChevronRight className={`h-3.5 w-3.5 transition ${contextSub === "add" ? "rotate-90" : ""}`} />
               </button>
+              {contextSub === "add" && (
+                <div className="ml-4 space-y-0.5 border-l border-[var(--apple-border)] pl-2 pb-1">
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = contextNode;
+                        setContextNode(null);
+                        setLabelTargetNode(target);
+                      }}
+                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                    >
+                      <Tag className="h-3 w-3" /> Labels
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = contextNode;
+                      setContextNode(null);
+                      if (!target.isFolder) setViewerNode(target);
+                      else onChangeSubTab("notes");
+                    }}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                  >
+                    <MessageSquareText className="h-3 w-3" /> Notes
+                  </button>
+                  {isTrueAdmin && !contextNode.isFolder && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        requestSignature(contextNode);
+                        setContextNode(null);
+                      }}
+                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                    >
+                      <FileSignature className="h-3 w-3" /> Request signature
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleFavorite([contextNode.id]);
+                      setContextNode(null);
+                    }}
+                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--apple-hover)]"
+                  >
+                    <Star className="h-3 w-3" /> {contextNode.isFavorite ? "Remove from Favorites" : "Add to Favorites"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {isTrueAdmin && (
+              <>
+                <div className="my-1 border-t border-[var(--apple-border)]" />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const target = contextNode;
+                    setContextNode(null);
+                    await fetch("/api/documents", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "toggle-publish", nodeId: target.id }),
+                    });
+                    await loadDocuments(true);
+                    showToast(target.isPublished ? "Hidden from unpublished investor view" : "Published to investors");
+                  }}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-[var(--apple-hover)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <Shield className="h-3.5 w-3.5" /> {contextNode.isPublished ? "Unpublish (hide)" : "Publish"}
+                  </span>
+                </button>
+                <a
+                  href={
+                    contextNode.driveWebViewLink ||
+                    (contextNode.isFolder
+                      ? `https://drive.google.com/drive/folders/${contextNode.driveFileId}`
+                      : `https://drive.google.com/file/d/${contextNode.driveFileId}/view`)
+                  }
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setContextNode(null)}
+                  className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[var(--apple-text-secondary)] hover:bg-[var(--apple-hover)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <ExternalLink className="h-3.5 w-3.5" /> Open in Google Drive
+                  </span>
+                  <span className="text-[10px] text-[var(--apple-text-muted)]">Read-Only</span>
+                </a>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Manage Labels Modal */}
+      {labelTargetNode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+          onClick={() => setLabelTargetNode(null)}
+        >
+          <div className="apple-card w-full max-w-sm space-y-4 p-5 text-xs" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Manage Labels — {labelTargetNode.name}</h3>
+              <button type="button" onClick={() => setLabelTargetNode(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {availableLabels.length === 0 ? (
+              <p className="text-[var(--apple-text-muted)]">No label groups defined yet in Settings &gt; Labels.</p>
+            ) : (
+              <div className="space-y-3">
+                {availableLabels.map((lbl) => (
+                  <div key={lbl.id}>
+                    <div className="mb-1.5 font-semibold text-[var(--apple-text-secondary)]">{lbl.groupName}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {lbl.values.map((val) => {
+                        const active = labelTargetNode.labels?.some((x) => x.id === lbl.id && x.value === val);
+                        return (
+                          <button
+                            key={val}
+                            type="button"
+                            onClick={async () => {
+                              await fetch("/api/documents", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  action: "set-label",
+                                  nodeId: labelTargetNode.id,
+                                  labelId: lbl.id,
+                                  value: val,
+                                }),
+                              });
+                              await loadDocuments(true);
+                              setLabelTargetNode(null);
+                              showToast(`Updated label "${val}"`);
+                            }}
+                            className={`rounded-full px-3 py-1 font-medium transition ${
+                              active ? "bg-[#007AFF] text-white" : "border border-[var(--apple-border)] hover:bg-[var(--apple-hover)]"
+                            }`}
+                          >
+                            {val}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

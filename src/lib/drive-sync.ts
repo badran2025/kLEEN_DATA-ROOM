@@ -72,8 +72,14 @@ function isExcluded(name: string, patternsCsv: string): boolean {
 }
 
 function extractLeadingIndex(name: string): string | null {
-  const match = name.match(/^(\d+(?:\.\d+)*)\s+/);
-  return match ? match[1] : null;
+  const match = name.trim().match(/^(\d+(?:\.\d+)*)(?:\.)?\s+/);
+  if (!match) return null;
+  const token = match[1];
+  // Ignore bare 4-digit years like "2025 Audit.pdf"
+  if (!token.includes(".") && Number(token) >= 1900 && Number(token) <= 2199) {
+    return null;
+  }
+  return token;
 }
 
 export function rebuildProjectIndices(projectId: string, preserveLeading = true) {
@@ -82,12 +88,13 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
     .prepare("SELECT id, driveFileId, parentDriveId, name, isFolder FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
     .all(projectId) as Array<{ id: string; driveFileId: string; parentDriveId: string | null; name: string; isFolder: number }>;
 
+  const validFolderIds = new Set(nodes.filter((n) => n.isFolder === 1).map((n) => n.driveFileId));
   const childrenByParent = new Map<string, typeof nodes>();
   for (const node of nodes) {
-    const key = node.parentDriveId || "__ROOT__";
-    const list = childrenByParent.get(key) ?? [];
+    const parentKey = node.parentDriveId && validFolderIds.has(node.parentDriveId) ? node.parentDriveId : "__ROOT__";
+    const list = childrenByParent.get(parentKey) ?? [];
     list.push(node);
-    childrenByParent.set(key, list);
+    childrenByParent.set(parentKey, list);
   }
 
   const updateStmt = db.prepare("UPDATE drive_nodes SET dotIndex = ?, sortOrder = ? WHERE id = ?");
@@ -99,15 +106,28 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
       if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
       const ia = extractLeadingIndex(a.name);
       const ib = extractLeadingIndex(b.name);
-      if (ia && ib) return compareDotIndex(ia, ib);
-      if (ia) return -1;
-      if (ib) return 1;
-      return a.name.localeCompare(b.name, undefined, { numeric: true });
+      if (ia && ib) {
+        const cmp = compareDotIndex(ia, ib);
+        if (cmp !== 0) return cmp;
+      }
+      if (ia && !ib) return -1;
+      if (!ia && ib) return 1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
     });
 
+    const usedIndices = new Set<string>();
+    let seq = 1;
     list.forEach((node, idx) => {
       const parsed = preserveLeading ? extractLeadingIndex(node.name) : null;
-      const dotIndex = parsed || (prefix ? `${prefix}.${idx + 1}` : `${idx + 1}`);
+      let dotIndex = parsed || "";
+      if (!dotIndex || usedIndices.has(dotIndex)) {
+        while (usedIndices.has(prefix ? `${prefix}.${seq}` : `${seq}`)) {
+          seq++;
+        }
+        dotIndex = prefix ? `${prefix}.${seq}` : `${seq}`;
+        seq++;
+      }
+      usedIndices.add(dotIndex);
       updateStmt.run(dotIndex, idx + 1, node.id);
       count++;
       if (node.isFolder) {
@@ -128,7 +148,70 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
   return count;
 }
 
+const activeSyncMap = new Map<
+  string,
+  Promise<{ mode: string; syncedCount: number; trashedCount: number; project: ReturnType<typeof mapProject> }>
+>();
+
+export function isProjectSyncing(projectId: string): boolean {
+  return activeSyncMap.has(projectId);
+}
+
+const g = globalThis as typeof globalThis & { __kleenAutoSyncTimer?: NodeJS.Timeout };
+
+export function ensureAutoSyncDaemon() {
+  if (g.__kleenAutoSyncTimer) return;
+  g.__kleenAutoSyncTimer = setInterval(() => {
+    void runDueAutoSyncs();
+  }, 60_000);
+}
+
+export async function runDueAutoSyncs() {
+  try {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT id, driveAuthMode, driveRootFolderId, lastSyncedAt, autoSyncIntervalMin
+         FROM projects
+         WHERE driveAuthMode != 'demo' AND driveRootFolderId IS NOT NULL AND driveRootFolderId != ''`
+      )
+      .all() as Array<{
+      id: string;
+      driveAuthMode: string;
+      driveRootFolderId: string;
+      lastSyncedAt: string | null;
+      autoSyncIntervalMin: number | null;
+    }>;
+
+    const nowMs = Date.now();
+    for (const r of rows) {
+      if (activeSyncMap.has(r.id)) continue;
+      const intervalMs = Math.max(1, Number(r.autoSyncIntervalMin || 1)) * 60_000;
+      const lastMs = r.lastSyncedAt ? new Date(r.lastSyncedAt).getTime() : 0;
+      if (!lastMs || nowMs - lastMs >= intervalMs) {
+        await syncProjectWithGoogleDrive(r.id).catch(() => null);
+      }
+    }
+  } catch {
+    // Keep background daemon resilient
+  }
+}
+
 export async function syncProjectWithGoogleDrive(
+  projectId: string,
+  actor?: { id?: string; name: string; email: string }
+) {
+  const existingPromise = activeSyncMap.get(projectId);
+  if (existingPromise) return existingPromise;
+
+  const task = runSyncProjectWithGoogleDrive(projectId, actor).finally(() => {
+    activeSyncMap.delete(projectId);
+  });
+  activeSyncMap.set(projectId, task);
+  return task;
+}
+
+async function runSyncProjectWithGoogleDrive(
   projectId: string,
   actor?: { id?: string; name: string; email: string }
 ) {
@@ -194,38 +277,56 @@ export async function syncProjectWithGoogleDrive(
       driveCreatedAt: string;
     }> = [];
 
-    const queue: string[] = [rootFolderId];
-    const visitedFolders = new Set<string>();
+    const folderQueue: string[] = [rootFolderId];
+    const visitedFolders = new Set<string>([rootFolderId]);
+    const discoveredDriveIds = new Set<string>();
+    let inFlight = 0;
 
-    while (queue.length > 0) {
-      const currentFolderId = queue.shift()!;
-      if (visitedFolders.has(currentFolderId)) continue;
-      visitedFolders.add(currentFolderId);
-
+    async function listFolderWithRetry(folderId: string) {
       let pageToken: string | undefined;
       do {
-        const res = await drive.files.list({
-          q: `'${currentFolderId}' in parents and trashed = false`,
-          fields: "nextPageToken, files(id,name,mimeType,size,webViewLink,createdTime,modifiedTime,parents)",
-          pageSize: 500,
-          pageToken,
-          supportsAllDrives: true,
-          includeItemsFromAllDrives: true,
-        });
+        let attempt = 0;
+        let resData: drive_v3.Schema$FileList | null = null;
+        while (attempt < 3) {
+          try {
+            const res = await drive!.files.list({
+              q: `'${folderId}' in parents and trashed = false`,
+              fields:
+                "nextPageToken, files(id,name,mimeType,size,webViewLink,createdTime,modifiedTime,parents,shortcutDetails)",
+              pageSize: 1000,
+              pageToken,
+              supportsAllDrives: true,
+              includeItemsFromAllDrives: true,
+            });
+            resData = res.data;
+            break;
+          } catch (e) {
+            attempt++;
+            if (attempt >= 3) throw e;
+            await new Promise((r) => setTimeout(r, 350 * attempt));
+          }
+        }
 
-        for (const f of res.data.files || []) {
+        for (const f of resData?.files || []) {
           if (!f.id || !f.name) continue;
           if (isExcluded(f.name, project.exclusionPatterns)) continue;
 
-          const isFolder = f.mimeType === "application/vnd.google-apps.folder";
-          const { extension, category } = classifyFile(f.name, f.mimeType || "", isFolder);
+          const isShortcut = f.mimeType === "application/vnd.google-apps.shortcut";
+          const effectiveMime = isShortcut && f.shortcutDetails?.targetMimeType ? f.shortcutDetails.targetMimeType : f.mimeType || "";
+          const effectiveId = isShortcut && f.shortcutDetails?.targetId ? f.shortcutDetails.targetId : f.id;
+          const isFolder = effectiveMime === "application/vnd.google-apps.folder";
+
+          if (discoveredDriveIds.has(effectiveId)) continue;
+          discoveredDriveIds.add(effectiveId);
+
+          const { extension, category } = classifyFile(f.name, effectiveMime, isFolder);
 
           discovered.push({
-            driveFileId: f.id,
-            parentDriveId: currentFolderId === rootFolderId ? null : currentFolderId,
+            driveFileId: effectiveId,
+            parentDriveId: folderId === rootFolderId ? null : folderId,
             name: f.name,
             isFolder,
-            mimeType: f.mimeType || "application/octet-stream",
+            mimeType: effectiveMime || "application/octet-stream",
             extension,
             category,
             sizeBytes: Number(f.size || 0),
@@ -234,11 +335,42 @@ export async function syncProjectWithGoogleDrive(
             driveCreatedAt: f.createdTime || now,
           });
 
-          if (isFolder) queue.push(f.id);
+          if (isFolder && !visitedFolders.has(effectiveId)) {
+            visitedFolders.add(effectiveId);
+            folderQueue.push(effectiveId);
+          }
         }
-        pageToken = res.data.nextPageToken || undefined;
+        pageToken = resData?.nextPageToken || undefined;
       } while (pageToken);
     }
+
+    await new Promise<void>((resolve, reject) => {
+      let failed = false;
+      const maxWorkers = 12;
+
+      function pump() {
+        if (failed) return;
+        if (folderQueue.length === 0 && inFlight === 0) {
+          resolve();
+          return;
+        }
+        while (inFlight < maxWorkers && folderQueue.length > 0 && !failed) {
+          const nextFolderId = folderQueue.shift()!;
+          inFlight++;
+          listFolderWithRetry(nextFolderId)
+            .then(() => {
+              inFlight--;
+              pump();
+            })
+            .catch((err) => {
+              failed = true;
+              reject(err);
+            });
+        }
+      }
+
+      pump();
+    });
 
     const discoveredIds = new Set(discovered.map((d) => d.driveFileId));
     const existingRows = db
@@ -263,6 +395,9 @@ export async function syncProjectWithGoogleDrive(
 
     db.exec("BEGIN");
     try {
+      // Remove any leftover demo rows cleanly when mirroring a real Drive root
+      db.prepare("DELETE FROM drive_nodes WHERE projectId = ? AND driveFileId LIKE 'demo-%'").run(project.id);
+
       for (const item of discovered) {
         const prev = existingByDriveId.get(item.driveFileId);
         if (prev) {
@@ -304,12 +439,10 @@ export async function syncProjectWithGoogleDrive(
       }
 
       let trashedCount = 0;
-      const deleteDemoStmt = db.prepare("DELETE FROM drive_nodes WHERE id = ?");
       const trashStmt = db.prepare("UPDATE drive_nodes SET isTrashed = 1, trashedAt = ?, updatedAt = ? WHERE id = ?");
       for (const row of existingRows) {
-        if (row.driveFileId.startsWith("demo-")) {
-          deleteDemoStmt.run(row.id);
-        } else if (!row.isTrashed && !discoveredIds.has(row.driveFileId)) {
+        if (row.driveFileId.startsWith("demo-")) continue;
+        if (!row.isTrashed && !discoveredIds.has(row.driveFileId)) {
           trashStmt.run(now, now, row.id);
           trashedCount++;
         }

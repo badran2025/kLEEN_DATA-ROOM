@@ -1,7 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/lib/auth";
-import { extractDriveFolderId, rebuildProjectIndices, syncProjectWithGoogleDrive } from "@/lib/drive-sync";
+import {
+  ensureAutoSyncDaemon,
+  extractDriveFolderId,
+  isProjectSyncing,
+  rebuildProjectIndices,
+  syncProjectWithGoogleDrive,
+} from "@/lib/drive-sync";
 import { getDb, nowIso, uid } from "@/lib/db";
+
+export async function GET() {
+  const session = await getCurrentSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  ensureAutoSyncDaemon();
+
+  return NextResponse.json({
+    driveAuthMode: session.project.driveAuthMode,
+    driveRootFolderId: session.project.driveRootFolderId,
+    driveRootFolderName: session.project.driveRootFolderName,
+    lastSyncedAt: session.project.lastSyncedAt,
+    lastSyncStatus: session.project.lastSyncStatus,
+    lastSyncError: session.project.lastSyncError,
+    autoSyncIntervalMin: session.project.autoSyncIntervalMin,
+    syncingNow: isProjectSyncing(session.project.id),
+  });
+}
 
 export async function POST(req: NextRequest) {
   const session = await getCurrentSession();

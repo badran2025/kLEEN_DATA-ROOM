@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/lib/auth";
-import { getDb, plain } from "@/lib/db";
+import { getDb, nowIso, plain, uid } from "@/lib/db";
+import { ensureAutoSyncDaemon, isProjectSyncing, syncProjectWithGoogleDrive } from "@/lib/drive-sync";
 import { compareDotIndex } from "@/lib/format";
 import { canAccessNode, resolveEffectivePermission } from "@/lib/permissions";
 
@@ -8,10 +9,38 @@ export async function GET() {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  ensureAutoSyncDaemon();
   const db = getDb();
+
+  if (session.project.driveAuthMode !== "demo" && session.project.driveRootFolderId) {
+    const realCount = db
+      .prepare(
+        "SELECT COUNT(*) as c FROM drive_nodes WHERE projectId = ? AND isTrashed = 0 AND driveFileId NOT LIKE 'demo-%'"
+      )
+      .get(session.project.id) as { c: number };
+    const lastMs = session.project.lastSyncedAt ? new Date(session.project.lastSyncedAt).getTime() : 0;
+    const staleMs = Date.now() - lastMs;
+
+    if (realCount.c === 0 || session.project.lastSyncStatus === "error") {
+      await syncProjectWithGoogleDrive(session.project.id).catch(() => null);
+    } else if (staleMs > 60_000 && !isProjectSyncing(session.project.id)) {
+      void syncProjectWithGoogleDrive(session.project.id).catch(() => null);
+    }
+  }
+
   const rawNodes = db
     .prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
     .all(session.project.id) as Array<Record<string, unknown>>;
+
+  const availableLabels = (
+    db
+      .prepare("SELECT id, groupName, valuesJson FROM label_definitions WHERE projectId = ? ORDER BY createdAt ASC")
+      .all(session.project.id) as Array<Record<string, unknown>>
+  ).map((l) => ({
+    id: String(l.id),
+    groupName: String(l.groupName),
+    values: JSON.parse(String(l.valuesJson || "[]")) as string[],
+  }));
 
   const trashedNodes = db
     .prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 1 ORDER BY trashedAt DESC")
@@ -128,10 +157,67 @@ export async function GET() {
 
   visibleNodes.sort((a, b) => compareDotIndex(String(a.dotIndex), String(b.dotIndex)));
 
+  const latestProj = db
+    .prepare("SELECT lastSyncedAt, lastSyncStatus, lastSyncError FROM projects WHERE id = ?")
+    .get(session.project.id) as { lastSyncedAt: string | null; lastSyncStatus: string; lastSyncError: string | null } | undefined;
+
   return NextResponse.json({
     nodes: visibleNodes,
+    availableLabels,
+    syncInfo: {
+      lastSyncedAt: latestProj?.lastSyncedAt || session.project.lastSyncedAt,
+      lastSyncStatus: latestProj?.lastSyncStatus || session.project.lastSyncStatus,
+      lastSyncError: latestProj?.lastSyncError || null,
+      syncingNow: isProjectSyncing(session.project.id),
+    },
     trashedNodes: session.isAdmin
       ? trashedNodes.map((t) => ({ ...plain(t), isFolder: t.isFolder === 1 }))
       : [],
   });
+}
+
+export async function POST(req: NextRequest) {
+  const session = await getCurrentSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json();
+  const db = getDb();
+  const now = nowIso();
+
+  if (body.action === "set-label" && body.nodeId && body.labelId && body.value) {
+    if (!session.isAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
+    const existing = db
+      .prepare("SELECT id, value FROM document_labels WHERE nodeId = ? AND labelId = ?")
+      .get(String(body.nodeId), String(body.labelId)) as { id: string; value: string } | undefined;
+
+    if (existing && existing.value === String(body.value)) {
+      db.prepare("DELETE FROM document_labels WHERE id = ?").run(existing.id);
+      return NextResponse.json({ ok: true, removed: true });
+    }
+    if (existing) {
+      db.prepare("UPDATE document_labels SET value = ? WHERE id = ?").run(String(body.value), existing.id);
+    } else {
+      db.prepare("INSERT INTO document_labels (id, nodeId, labelId, value, createdAt) VALUES (?, ?, ?, ?, ?)").run(
+        uid("dlb"),
+        String(body.nodeId),
+        String(body.labelId),
+        String(body.value),
+        now
+      );
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "toggle-publish" && body.nodeId) {
+    if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
+    const row = db
+      .prepare("SELECT id, isPublished, name FROM drive_nodes WHERE id = ? AND projectId = ?")
+      .get(String(body.nodeId), session.project.id) as { id: string; isPublished: number; name: string } | undefined;
+    if (!row) return NextResponse.json({ error: "Node not found" }, { status: 404 });
+    const nextPub = row.isPublished === 1 ? 0 : 1;
+    db.prepare("UPDATE drive_nodes SET isPublished = ?, updatedAt = ? WHERE id = ?").run(nextPub, now, row.id);
+    return NextResponse.json({ ok: true, isPublished: nextPub === 1 });
+  }
+
+  return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }
