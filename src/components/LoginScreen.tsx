@@ -1,19 +1,19 @@
 "use client";
 
 import React, { useState } from "react";
-import { Lock, Mail, ArrowRight, ShieldCheck, Globe, Sparkles } from "lucide-react";
+import { Lock, Mail, ArrowRight, ShieldCheck, Globe } from "lucide-react";
 import { KleenLogo } from "./KleenLogo";
 
 export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
-  const [email, setEmail] = useState("ahmed.badran@kleen.sa");
-  const [password, setPassword] = useState("kleen2026");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [lang, setLang] = useState<"en" | "ar">("en");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isAr = lang === "ar";
 
-  async function handleSubmit(e: React.FormEvent, overrideEmail?: string, overridePass?: string) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
@@ -22,8 +22,8 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: overrideEmail ?? email,
-          password: overridePass ?? password,
+          email,
+          password,
         }),
       });
       const data = await res.json();
@@ -90,7 +90,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
           </p>
         </div>
 
-        <form onSubmit={(e) => handleSubmit(e)} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--apple-text-secondary)]">
               {isAr ? "البريد الإلكتروني" : "Email address"}
@@ -100,6 +100,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
               <input
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@company.com"
@@ -117,8 +118,10 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
               <input
                 type="password"
                 required
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
                 className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] py-2.5 pr-3.5 pl-10 text-sm outline-none transition focus:border-[#007AFF] focus:ring-2 focus:ring-[#007AFF]/20"
               />
             </div>
@@ -140,39 +143,11 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
           </button>
         </form>
 
-        {/* Quick Demo Access Pills */}
-        <div className="mt-6 border-t border-[var(--apple-border)] pt-4">
-          <div className="mb-2.5 flex items-center gap-1.5 text-[11px] font-medium text-[var(--apple-text-muted)]">
-            <Sparkles className="h-3.5 w-3.5 text-[#007AFF]" />
-            {isAr ? "دخول تجريبي سريع (كلمة المرور: kleen2026)" : "Quick Demo Accounts (password: kleen2026)"}
-          </div>
-          <div className="grid grid-cols-1 gap-2">
-            {[
-              { label: "Ahmed Badran", role: "Administrator", em: "ahmed.badran@kleen.sa" },
-              { label: "Khalid Al-Mansoor", role: "Investor Group (NDA + Watermark)", em: "investor@partner-capital.sa" },
-              { label: "Sara Al-Harbi", role: "Legal Advisors", em: "counsel@legal-advisors.sa" },
-            ].map((acc) => (
-              <button
-                key={acc.em}
-                type="button"
-                onClick={(e) => {
-                  setEmail(acc.em);
-                  setPassword("kleen2026");
-                  handleSubmit(e, acc.em, "kleen2026");
-                }}
-                className="flex items-center justify-between rounded-xl border border-[var(--apple-border)] bg-[var(--apple-surface)] px-3 py-2 text-left text-xs transition hover:border-[#007AFF]/50 hover:bg-[var(--apple-hover)]"
-              >
-                <div>
-                  <div className="font-medium text-[var(--apple-text)]">{acc.label}</div>
-                  <div className="text-[11px] text-[var(--apple-text-muted)]">{acc.em}</div>
-                </div>
-                <span className="rounded-full bg-[#007AFF]/10 px-2.5 py-0.5 text-[10px] font-medium text-[#007AFF]">
-                  {acc.role}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <p className="mt-5 border-t border-[var(--apple-border)] pt-4 text-center text-[11px] text-[var(--apple-text-muted)]">
+          {isAr
+            ? "الدخول مقتصر على المشاركين المصرح لهم. استخدم رابط الدعوة إذا كانت هذه زيارتك الأولى."
+            : "Access is restricted to authorized participants. Use your invitation link if signing in for the first time."}
+        </p>
       </div>
 
       <p className="relative z-10 mt-5 text-[11px] text-[var(--apple-text-muted)]">
