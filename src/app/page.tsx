@@ -3,12 +3,14 @@
 import React, { useCallback, useEffect, useState } from "react";
 import type { SessionResponse } from "@/lib/types";
 import { LoginScreen } from "@/components/LoginScreen";
+import { InviteAcceptScreen } from "@/components/InviteAcceptScreen";
 import { DataRoomShell } from "@/components/DataRoomShell";
 import { KleenLogo } from "@/components/KleenLogo";
 
 export default function HomePage() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
 
   const loadSession = useCallback(async () => {
     try {
@@ -27,8 +29,29 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inv = params.get("invite");
+    if (inv) setInviteToken(inv);
     loadSession();
   }, [loadSession]);
+
+  if (inviteToken) {
+    return (
+      <InviteAcceptScreen
+        token={inviteToken}
+        onAccepted={() => {
+          window.history.replaceState({}, "", "/");
+          setInviteToken(null);
+          setLoading(true);
+          loadSession();
+        }}
+        onBackToLogin={() => {
+          window.history.replaceState({}, "", "/");
+          setInviteToken(null);
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (

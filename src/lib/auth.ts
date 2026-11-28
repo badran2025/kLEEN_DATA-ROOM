@@ -128,6 +128,10 @@ export async function getCurrentSession() {
     .get(String(projectRow.id), String(userRow.id)) as Record<string, unknown> | undefined;
   if (!partRow || !toBool(partRow.accessEnabled)) return null;
 
+  const nowMs = Date.now();
+  if (partRow.accessStart && new Date(String(partRow.accessStart)).getTime() > nowMs) return null;
+  if (partRow.accessEnd && new Date(String(partRow.accessEnd)).getTime() < nowMs) return null;
+
   const actualGroupRow = db
     .prepare("SELECT * FROM groups WHERE id = ?")
     .get(String(partRow.groupId)) as Record<string, unknown> | undefined;

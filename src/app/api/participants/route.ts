@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import * as XLSX from "xlsx";
 import { getCurrentSession, mapGroup } from "@/lib/auth";
@@ -119,13 +120,21 @@ export async function POST(req: NextRequest) {
     const entries: Array<{ email: string; fullName?: string }> = Array.isArray(body.entries) ? body.entries : [];
     const invitationLanguage = String(body.invitationLanguage || "English (United States)");
     const docNotifications = body.docNotifications !== false ? 1 : 0;
+    const accessEnabled = body.accessEnabled !== false ? 1 : 0;
+    const accessStart = body.accessStart ? String(body.accessStart) : null;
+    const accessEnd = body.accessEnd ? String(body.accessEnd) : null;
+    const require2fa = body.require2fa ? 1 : 0;
+    const allowedIps = String(body.allowedIps || "");
+    const customPassword = body.initialPassword ? String(body.initialPassword).trim() : "";
 
     if (!groupId || entries.length === 0) {
       return NextResponse.json({ error: "Group and at least one email are required" }, { status: 400 });
     }
 
-    const defaultHash = await bcrypt.hash("kleen2026", 10);
+    const passwordToUse = customPassword || "kleen2026";
+    const defaultHash = await bcrypt.hash(passwordToUse, 10);
     let addedCount = 0;
+    const invites: Array<{ email: string; fullName: string; inviteToken: string }> = [];
 
     for (const entry of entries) {
       const email = String(entry.email || "").trim().toLowerCase();
@@ -144,27 +153,41 @@ export async function POST(req: NextRequest) {
         user = { id: newUid };
       }
 
+      const inviteToken = crypto.randomBytes(18).toString("hex");
       const exists = db
         .prepare("SELECT id FROM project_participants WHERE projectId = ? AND userId = ?")
-        .get(session.project.id, user.id);
+        .get(session.project.id, user.id) as { id: string } | undefined;
 
       if (!exists) {
         db.prepare(
-          `INSERT INTO project_participants (id, projectId, userId, groupId, status, docNotifications, invitationLanguage, addedBy, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, 'Invited', ?, ?, ?, ?, ?)`
+          `INSERT INTO project_participants (
+            id, projectId, userId, groupId, status, accessEnabled, accessStart, accessEnd,
+            require2fa, allowedIps, docNotifications, invitationLanguage, addedBy, inviteToken, createdAt, updatedAt
+          ) VALUES (?, ?, ?, ?, 'Invited', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           uid("prt"),
           session.project.id,
           user.id,
           groupId,
+          accessEnabled,
+          accessStart,
+          accessEnd,
+          require2fa,
+          allowedIps,
           docNotifications,
           invitationLanguage,
           `${session.user.firstName} ${session.user.lastName}`,
+          inviteToken,
           now,
           now
         );
         addedCount++;
+      } else {
+        db.prepare(
+          "UPDATE project_participants SET groupId = ?, accessEnabled = ?, accessStart = ?, accessEnd = ?, require2fa = ?, allowedIps = ?, inviteToken = ?, updatedAt = ? WHERE id = ?"
+        ).run(groupId, accessEnabled, accessStart, accessEnd, require2fa, allowedIps, inviteToken, now, exists.id);
       }
+      invites.push({ email, fullName: `${firstName} ${lastName}`.trim(), inviteToken });
     }
 
     db.prepare(
@@ -178,11 +201,32 @@ export async function POST(req: NextRequest) {
       session.actualGroup.name,
       "Participants",
       "Participants invited",
-      `Invited ${addedCount} participant(s)`,
+      `Invited ${addedCount} participant(s)${accessStart ? ` (from ${accessStart})` : ""}`,
       now
     );
 
-    return NextResponse.json({ ok: true, addedCount });
+    return NextResponse.json({
+      ok: true,
+      addedCount,
+      invites,
+      usedCustomPassword: Boolean(customPassword),
+    });
+  }
+
+  if (body.action === "resend-invite" && body.participantId) {
+    const inviteToken = crypto.randomBytes(18).toString("hex");
+    db.prepare("UPDATE project_participants SET inviteToken = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      inviteToken,
+      now,
+      String(body.participantId),
+      session.project.id
+    );
+    const row = db
+      .prepare(
+        "SELECT u.email FROM project_participants pp JOIN users u ON u.id = pp.userId WHERE pp.id = ?"
+      )
+      .get(String(body.participantId)) as { email: string } | undefined;
+    return NextResponse.json({ ok: true, inviteToken, email: row?.email || "" });
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });

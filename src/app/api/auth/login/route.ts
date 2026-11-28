@@ -40,11 +40,25 @@ export async function POST(req: NextRequest) {
     const participation = db
       .prepare("SELECT * FROM project_participants WHERE projectId = ? AND userId = ?")
       .get(project.id, user.id) as
-      | { id: string; groupId: string; status: string; accessEnabled: number }
+      | { id: string; groupId: string; status: string; accessEnabled: number; accessStart: string | null; accessEnd: string | null }
       | undefined;
 
     if (!participation || !participation.accessEnabled) {
       return NextResponse.json({ error: "Your access to this Data Room is currently disabled." }, { status: 403 });
+    }
+
+    const nowMs = Date.now();
+    if (participation.accessStart && new Date(participation.accessStart).getTime() > nowMs) {
+      return NextResponse.json(
+        { error: `Your Data Room access starts on ${new Date(participation.accessStart).toLocaleString()}.` },
+        { status: 403 }
+      );
+    }
+    if (participation.accessEnd && new Date(participation.accessEnd).getTime() < nowMs) {
+      return NextResponse.json(
+        { error: `Your Data Room access expired on ${new Date(participation.accessEnd).toLocaleString()}.` },
+        { status: 403 }
+      );
     }
 
     const group = db.prepare("SELECT * FROM groups WHERE id = ?").get(participation.groupId) as

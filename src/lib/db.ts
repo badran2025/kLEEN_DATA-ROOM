@@ -178,6 +178,7 @@ function initSchema(db: DatabaseSyncType) {
       invitationLanguage TEXT NOT NULL DEFAULT 'English (United States)',
       lastSignInAt TEXT,
       addedBy TEXT NOT NULL DEFAULT 'Ahmed Badran',
+      inviteToken TEXT,
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
       UNIQUE(projectId, userId)
@@ -380,4 +381,9 @@ function initSchema(db: DatabaseSyncType) {
       createdAt TEXT NOT NULL
     );
   `);
+
+  const cols = db.prepare("PRAGMA table_info(project_participants)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "inviteToken")) {
+    db.exec("ALTER TABLE project_participants ADD COLUMN inviteToken TEXT;");
+  }
 }

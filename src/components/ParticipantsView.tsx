@@ -13,6 +13,11 @@ import {
   MoreHorizontal,
   X,
   ArrowLeft,
+  Copy,
+  Mail,
+  Check,
+  Info,
+  Calendar,
 } from "lucide-react";
 import type { GroupDto, ProjectDto } from "@/lib/types";
 import { formatDateShort } from "@/lib/format";
@@ -71,11 +76,25 @@ export function ParticipantsView({
   const [copySourceGroupId, setCopySourceGroupId] = useState("");
   const [activeUserDetail, setActiveUserDetail] = useState<MemberRow | null>(null);
 
-  // Invite wizard state
+  // Invite wizard state (2-step: 1 General -> 2 Project access)
+  const [invStep, setInvStep] = useState<1 | 2>(1);
   const [invEmails, setInvEmails] = useState("");
+  const [specifyFullNames, setSpecifyFullNames] = useState(false);
+  const [namedRows, setNamedRows] = useState<Array<{ email: string; fullName: string }>>([{ email: "", fullName: "" }]);
   const [invGroupId, setInvGroupId] = useState("");
   const [invLang, setInvLang] = useState(INVITATION_LANGUAGES[0]);
   const [invNotify, setInvNotify] = useState(true);
+  const [invPassword, setInvPassword] = useState("");
+  const [invAccessEnabled, setInvAccessEnabled] = useState(true);
+  const [invStartCustom, setInvStartCustom] = useState(false);
+  const [invStartDate, setInvStartDate] = useState("");
+  const [invEndCustom, setInvEndCustom] = useState(false);
+  const [invEndDate, setInvEndDate] = useState("");
+  const [invRequire2fa, setInvRequire2fa] = useState(false);
+  const [invAllowedIpEnabled, setInvAllowedIpEnabled] = useState(false);
+  const [invAllowedIps, setInvAllowedIps] = useState("");
+  const [generatedInvites, setGeneratedInvites] = useState<Array<{ email: string; fullName: string; inviteToken: string }>>([]);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
 
   // Create Group wizard state
   const [newGroupName, setNewGroupName] = useState("");
@@ -103,13 +122,38 @@ export function ParticipantsView({
     loadParticipants();
   }, [project.id]);
 
-  async function submitInvite(e: React.FormEvent) {
-    e.preventDefault();
-    const list = invEmails
+  function getParsedInviteEntries() {
+    if (specifyFullNames) {
+      return namedRows
+        .map((r) => ({ email: r.email.trim(), fullName: r.fullName.trim() }))
+        .filter((r) => r.email.includes("@"));
+    }
+    return invEmails
       .split(/[\s,;]+/)
       .map((s) => s.trim())
       .filter((s) => s.includes("@"))
       .map((email) => ({ email }));
+  }
+
+  function resetInviteWizard() {
+    setInvStep(1);
+    setInvEmails("");
+    setSpecifyFullNames(false);
+    setNamedRows([{ email: "", fullName: "" }]);
+    setInvPassword("");
+    setInvAccessEnabled(true);
+    setInvStartCustom(false);
+    setInvStartDate("");
+    setInvEndCustom(false);
+    setInvEndDate("");
+    setInvRequire2fa(false);
+    setInvAllowedIpEnabled(false);
+    setInvAllowedIps("");
+  }
+
+  async function submitInvite(e: React.FormEvent) {
+    e.preventDefault();
+    const list = getParsedInviteEntries();
     if (list.length === 0) return;
 
     const res = await fetch("/api/participants", {
@@ -121,11 +165,19 @@ export function ParticipantsView({
         entries: list,
         invitationLanguage: invLang,
         docNotifications: invNotify,
+        initialPassword: invPassword,
+        accessEnabled: invAccessEnabled,
+        accessStart: invStartCustom && invStartDate ? new Date(invStartDate).toISOString() : null,
+        accessEnd: invEndCustom && invEndDate ? new Date(invEndDate).toISOString() : null,
+        require2fa: invRequire2fa,
+        allowedIps: invAllowedIpEnabled ? invAllowedIps : "",
       }),
     });
+    const data = await res.json();
     if (res.ok) {
       setShowInviteModal(false);
-      setInvEmails("");
+      resetInviteWizard();
+      setGeneratedInvites(data.invites || []);
       showToast(`Invited ${list.length} participant(s)`);
       await loadParticipants();
       onRefreshSession();
@@ -563,8 +615,27 @@ export function ParticipantsView({
                             </button>
                           </td>
                           <td className="px-4 py-2.5 tabular-nums">{formatDateShort(m.lastSignInAt)}</td>
-                          <td />
-                          <td />
+                          <td className="px-4 py-2.5 text-right" colSpan={2}>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const r = await fetch("/api/participants", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ action: "resend-invite", participantId: m.id }),
+                                });
+                                if (r.ok) {
+                                  const d = await r.json();
+                                  const url = `${window.location.origin}/?invite=${d.inviteToken}`;
+                                  navigator.clipboard?.writeText(url);
+                                  showToast(`Copied invite link for ${d.email}`);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border)] px-2 py-1 text-[10px] font-medium text-[#007AFF] hover:bg-[var(--apple-selected)]"
+                            >
+                              <Copy className="h-3 w-3" /> Copy invite link
+                            </button>
+                          </td>
                         </tr>
                       ))}
                   </React.Fragment>
@@ -574,70 +645,398 @@ export function ParticipantsView({
         </table>
       </div>
 
-      {/* Add Participants Modal */}
+      {/* Add Participants 2-Step Wizard Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-          <form onSubmit={submitInvite} className="apple-card w-full max-w-md space-y-4 p-6 text-xs">
+          <form onSubmit={submitInvite} className="apple-card w-full max-w-lg space-y-4 p-6 text-xs">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold">Add participants</h3>
-              <button type="button" onClick={() => setShowInviteModal(false)}>
+              <div>
+                <div className="text-[11px] text-[var(--apple-text-muted)]">Participants &gt; Add participants</div>
+                <h3 className="text-base font-semibold">Add participants</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInviteModal(false);
+                  resetInviteWizard();
+                }}
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div>
-              <label className="mb-1 block font-medium">Emails (comma, space, or newline separated)</label>
-              <textarea
-                rows={3}
-                required
-                value={invEmails}
-                onChange={(e) => setInvEmails(e.target.value)}
-                placeholder="name@company.com"
-                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-2.5 outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block font-medium">Group</label>
-              <select
-                value={invGroupId}
-                onChange={(e) => setInvGroupId(e.target.value)}
-                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
-              >
-                {groups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name} ({g.role})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block font-medium">Invitation language</label>
-              <select
-                value={invLang}
-                onChange={(e) => setInvLang(e.target.value)}
-                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
-              >
-                {INVITATION_LANGUAGES.map((l) => (
-                  <option key={l}>{l}</option>
-                ))}
-              </select>
-            </div>
-            <label className="flex items-center justify-between">
-              <span>Send emails about new mirrored documents</span>
-              <input type="checkbox" checked={invNotify} onChange={(e) => setInvNotify(e.target.checked)} />
-            </label>
-            <div className="flex justify-end gap-2 pt-2">
+
+            {/* Stepper Header matching iDeals VDR */}
+            <div className="flex items-center gap-3 border-b border-[var(--apple-border)] pb-3">
               <button
                 type="button"
-                onClick={() => setShowInviteModal(false)}
-                className="rounded-xl border border-[var(--apple-border)] px-4 py-2"
+                onClick={() => setInvStep(1)}
+                className={`flex items-center gap-1.5 font-semibold ${
+                  invStep === 1 ? "text-[#007AFF]" : "text-emerald-500"
+                }`}
               >
-                Cancel
+                <span
+                  className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white ${
+                    invStep === 1 ? "bg-[#007AFF]" : "bg-emerald-500"
+                  }`}
+                >
+                  {invStep === 1 ? "1" : "✓"}
+                </span>
+                General
               </button>
-              <button type="submit" className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">
-                Invite
+              <div className="h-px flex-1 bg-[var(--apple-border)]" />
+              <div
+                className={`flex items-center gap-1.5 font-semibold ${
+                  invStep === 2 ? "text-[#007AFF]" : "text-[var(--apple-text-muted)]"
+                }`}
+              >
+                <span
+                  className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                    invStep === 2
+                      ? "bg-[#007AFF] text-white"
+                      : "border border-[var(--apple-border-strong)] text-[var(--apple-text-muted)]"
+                  }`}
+                >
+                  2
+                </span>
+                Project access
+              </div>
+            </div>
+
+            {invStep === 1 ? (
+              <div className="space-y-3.5">
+                {!specifyFullNames ? (
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <label className="font-medium">Emails (comma, space, or enter to separate)</label>
+                      <button
+                        type="button"
+                        onClick={() => setSpecifyFullNames(true)}
+                        className="font-medium text-[#007AFF] hover:underline"
+                      >
+                        Specify full names
+                      </button>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={invEmails}
+                      onChange={(e) => setInvEmails(e.target.value)}
+                      placeholder="name@company.com"
+                      className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-2.5 outline-none focus:border-[#007AFF]"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="font-medium">Participants</label>
+                      <button
+                        type="button"
+                        onClick={() => setSpecifyFullNames(false)}
+                        className="font-medium text-[#007AFF] hover:underline"
+                      >
+                        Invite without full names
+                      </button>
+                    </div>
+                    <div className="max-h-36 space-y-2 overflow-y-auto">
+                      {namedRows.map((row, idx) => (
+                        <div key={idx} className="grid grid-cols-2 gap-2">
+                          <input
+                            type="email"
+                            value={row.email}
+                            onChange={(e) =>
+                              setNamedRows((prev) =>
+                                prev.map((r, i) => (i === idx ? { ...r, email: e.target.value } : r))
+                              )
+                            }
+                            placeholder="name@website.com"
+                            className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                          />
+                          <input
+                            value={row.fullName}
+                            onChange={(e) =>
+                              setNamedRows((prev) =>
+                                prev.map((r, i) => (i === idx ? { ...r, fullName: e.target.value } : r))
+                              )
+                            }
+                            placeholder="Full name"
+                            className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setNamedRows((prev) => [...prev, { email: "", fullName: "" }])}
+                      className="font-medium text-[#007AFF]"
+                    >
+                      + Add another participant
+                    </button>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block font-medium">Group</label>
+                    <select
+                      value={invGroupId}
+                      onChange={(e) => setInvGroupId(e.target.value)}
+                      className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                    >
+                      {groups.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name} ({g.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block font-medium">Invitation language</label>
+                    <select
+                      value={invLang}
+                      onChange={(e) => setInvLang(e.target.value)}
+                      className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                    >
+                      {INVITATION_LANGUAGES.map((l) => (
+                        <option key={l}>{l}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1 block font-medium">
+                    Initial Password (optional — investor can set their own via invite link)
+                  </label>
+                  <input
+                    type="text"
+                    value={invPassword}
+                    onChange={(e) => setInvPassword(e.target.value)}
+                    placeholder="Leave empty to let investor set password via link (fallback: kleen2026)"
+                    className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                  />
+                </div>
+
+                <label className="flex items-center justify-between pt-1">
+                  <span>Send emails about new mirrored documents</span>
+                  <input type="checkbox" checked={invNotify} onChange={(e) => setInvNotify(e.target.checked)} />
+                </label>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowInviteModal(false);
+                      resetInviteWizard();
+                    }}
+                    className="rounded-xl border border-[var(--apple-border)] px-4 py-2"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={getParsedInviteEntries().length === 0}
+                    onClick={() => setInvStep(2)}
+                    className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white disabled:opacity-40"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Step 2: Project Access (matching iDeals VDR Step 2) */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">Project access</div>
+                    <div className="text-[11px] text-[var(--apple-text-muted)]">Define participant access period</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={invAccessEnabled}
+                    onChange={(e) => setInvAccessEnabled(e.target.checked)}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/60 p-3">
+                    <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--apple-text-muted)]">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> Start date
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setInvStartCustom((v) => !v)}
+                        className="text-[#007AFF]"
+                      >
+                        {invStartCustom ? "Use Now" : "Edit"}
+                      </button>
+                    </div>
+                    {!invStartCustom ? (
+                      <div className="font-semibold">Now</div>
+                    ) : (
+                      <input
+                        type="datetime-local"
+                        value={invStartDate}
+                        onChange={(e) => setInvStartDate(e.target.value)}
+                        className="w-full rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-2 py-1 text-[11px]"
+                      />
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/60 p-3">
+                    <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--apple-text-muted)]">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> End date
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setInvEndCustom((v) => !v)}
+                        className="text-[#007AFF]"
+                      >
+                        {invEndCustom ? "Clear" : "Edit"}
+                      </button>
+                    </div>
+                    {!invEndCustom ? (
+                      <div className="font-semibold text-[var(--apple-text-muted)]">Not set</div>
+                    ) : (
+                      <input
+                        type="datetime-local"
+                        value={invEndDate}
+                        onChange={(e) => setInvEndDate(e.target.value)}
+                        className="w-full rounded-lg border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-2 py-1 text-[11px]"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 rounded-xl bg-[var(--apple-bg)] px-3 py-2 text-[11px] text-[var(--apple-text-secondary)]">
+                  <Info className="h-3.5 w-3.5 shrink-0 text-[#007AFF]" />
+                  <span>
+                    {invStartCustom && invStartDate
+                      ? `Access period scheduled starting ${new Date(invStartDate).toLocaleString()}`
+                      : "Invitations will be ready to send now"}
+                  </span>
+                </div>
+
+                <label className="flex items-center justify-between border-t border-[var(--apple-border)] pt-3">
+                  <div>
+                    <div className="font-semibold">2-step verification</div>
+                    <div className="text-[11px] text-[var(--apple-text-muted)]">
+                      Require users to verify their identity with a second factor
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={invRequire2fa}
+                    onChange={(e) => setInvRequire2fa(e.target.checked)}
+                  />
+                </label>
+
+                <div className="space-y-2 border-t border-[var(--apple-border)] pt-3">
+                  <label className="flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold">Allowed IP addresses</div>
+                      <div className="text-[11px] text-[var(--apple-text-muted)]">
+                        Specify applicable IP addresses or ranges to allow access
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={invAllowedIpEnabled}
+                      onChange={(e) => setInvAllowedIpEnabled(e.target.checked)}
+                    />
+                  </label>
+                  {invAllowedIpEnabled && (
+                    <input
+                      value={invAllowedIps}
+                      onChange={(e) => setInvAllowedIps(e.target.value)}
+                      placeholder="e.g. 192.168.1.0/24, 203.0.113.5"
+                      className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                    />
+                  )}
+                </div>
+
+                <div className="flex justify-between pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setInvStep(1)}
+                    className="rounded-xl border border-[var(--apple-border)] px-4 py-2"
+                  >
+                    ← Back
+                  </button>
+                  <button type="submit" className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">
+                    Add & Generate Invite Link
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+        </div>
+      )}
+
+      {/* Invitation Links Ready Modal */}
+      {generatedInvites.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs">
+          <div className="apple-card w-full max-w-lg space-y-4 p-6 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold">Participant Invitations Ready</h3>
+              <button type="button" onClick={() => setGeneratedInvites([])}>
+                <X className="h-4 w-4" />
               </button>
             </div>
-          </form>
+            <p className="text-[var(--apple-text-secondary)]">
+              Send the onboarding link below to each participant. When they open the link, they will set their own
+              password and enter <strong>{project.name}</strong> directly.
+            </p>
+            <div className="max-h-64 space-y-2.5 overflow-y-auto">
+              {generatedInvites.map((inv) => {
+                const url =
+                  typeof window !== "undefined" ? `${window.location.origin}/?invite=${inv.inviteToken}` : "";
+                const mailSubject = encodeURIComponent(`Invitation to ${project.name} (Kleen Data Room)`);
+                const mailBody = encodeURIComponent(
+                  `Hello ${inv.fullName},\n\nYou have been invited to access ${project.name} Data Room.\n\nClick the link below to set your password and sign in:\n${url}\n`
+                );
+                return (
+                  <div key={inv.inviteToken} className="rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/60 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{inv.email}</span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(url);
+                            setCopiedToken(inv.inviteToken);
+                            setTimeout(() => setCopiedToken(null), 2000);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-2.5 py-1 font-medium text-white"
+                        >
+                          {copiedToken === inv.inviteToken ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                          {copiedToken === inv.inviteToken ? "Copied" : "Copy link"}
+                        </button>
+                        <a
+                          href={`mailto:${inv.email}?subject=${mailSubject}&body=${mailBody}`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[var(--apple-border-strong)] px-2.5 py-1 font-medium hover:bg-[var(--apple-hover)]"
+                        >
+                          <Mail className="h-3 w-3" /> Email
+                        </a>
+                      </div>
+                    </div>
+                    <div className="truncate rounded-lg bg-[var(--apple-surface)] px-2.5 py-1.5 font-mono text-[10px] text-[var(--apple-text-muted)]">
+                      {url}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setGeneratedInvites([])}
+                className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white"
+              >
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
