@@ -304,9 +304,12 @@ export async function syncProjectWithGoogleDrive(
       }
 
       let trashedCount = 0;
+      const deleteDemoStmt = db.prepare("DELETE FROM drive_nodes WHERE id = ?");
       const trashStmt = db.prepare("UPDATE drive_nodes SET isTrashed = 1, trashedAt = ?, updatedAt = ? WHERE id = ?");
       for (const row of existingRows) {
-        if (!row.isTrashed && !discoveredIds.has(row.driveFileId)) {
+        if (row.driveFileId.startsWith("demo-")) {
+          deleteDemoStmt.run(row.id);
+        } else if (!row.isTrashed && !discoveredIds.has(row.driveFileId)) {
           trashStmt.run(now, now, row.id);
           trashedCount++;
         }
