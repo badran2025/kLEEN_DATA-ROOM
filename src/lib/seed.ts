@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { KLEEN_DEFAULT_NDA_TEXT } from "./nda-template";
 
 function id(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 14)}`;
@@ -244,7 +245,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     "NDA",
     "On first sign-in",
     JSON.stringify([investorGroupId]),
-    "By accessing Kleen Data Room, you agree to keep all financial, legal, and operational documents strictly confidential and not to copy, distribute, or share any mirrored materials outside your authorized investment team.",
+    KLEEN_DEFAULT_NDA_TEXT,
     1,
     now,
     now

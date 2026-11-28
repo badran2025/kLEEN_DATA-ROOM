@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { GroupDto, ProjectDto, UserDto } from "@/lib/types";
 import { formatDateShort, formatDateTime } from "@/lib/format";
+import { renderNdaText } from "@/lib/nda-template";
 import { KleenLogo } from "./KleenLogo";
 
 export type SettingsSubTab =
@@ -1171,8 +1172,11 @@ export function SettingsView({
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-4 leading-relaxed text-[var(--apple-text-secondary)]">
-              {previewTerm.content}
+            <div
+              dir="auto"
+              className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-4 leading-relaxed text-[var(--apple-text-secondary)]"
+            >
+              {renderNdaText(previewTerm.content)}
             </div>
             <label className="flex items-center gap-2 font-medium">
               <input

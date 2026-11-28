@@ -28,6 +28,7 @@ import {
   Globe,
 } from "lucide-react";
 import type { SessionResponse } from "@/lib/types";
+import { renderNdaText } from "@/lib/nda-template";
 import { KleenLogo } from "./KleenLogo";
 import { DocumentsWorkspace } from "./DocumentsWorkspace";
 import { DashboardView } from "./DashboardView";
@@ -461,10 +462,18 @@ export function DataRoomShell({
       {/* NDA / Terms of Access Gate Modal */}
       {pendingTerm && !session.isViewingAs && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md">
-          <div className="apple-card w-full max-w-lg space-y-4 p-6 text-xs">
+          <div className="apple-card w-full max-w-2xl space-y-4 p-6 text-xs">
             <h2 className="text-base font-semibold">{pendingTerm.title}</h2>
-            <div className="max-h-64 overflow-y-auto rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-4 leading-relaxed text-[var(--apple-text-secondary)]">
-              {pendingTerm.content}
+            <div
+              dir="auto"
+              className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-4 leading-relaxed text-[var(--apple-text-secondary)]"
+            >
+              {renderNdaText(pendingTerm.content, {
+                name: `${user.firstName} ${user.lastName}`.trim() || user.email,
+                title: user.jobTitle || "Authorized Representative",
+                company: user.company || "Investor / Partner Entity",
+                email: user.email,
+              })}
             </div>
             <label className="flex items-center gap-2 font-medium">
               <input type="checkbox" checked={ndaChecked} onChange={(e) => setNdaChecked(e.target.checked)} />
