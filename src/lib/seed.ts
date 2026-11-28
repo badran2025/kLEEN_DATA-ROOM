@@ -1,15 +1,15 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { AppDb } from "./db";
 import { KLEEN_DEFAULT_NDA_TEXT } from "./nda-template";
 
 function id(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 14)}`;
 }
 
-export function seedIfEmpty(db: DatabaseSync) {
-  const row = db.prepare("SELECT COUNT(*) as c FROM projects").get() as { c: number } | undefined;
-  if (row && row.c > 0) return;
+export async function seedIfEmpty(db: AppDb) {
+  const row = await db.prepare("SELECT COUNT(*) as c FROM projects").get<{ c: number }>();
+  if (row && Number(row.c) > 0) return;
 
   const now = new Date().toISOString();
   const passwordHash = bcrypt.hashSync("kleen2026", 10);
@@ -22,17 +22,20 @@ export function seedIfEmpty(db: DatabaseSync) {
     INSERT INTO users (id, email, passwordHash, firstName, lastName, company, jobTitle, phone, language, timezone, passwordChangedAt, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertUser.run(adminId, "ahmed.badran@kleen.sa", passwordHash, "Ahmed", "Badran", "Kleen", "Data Room Administrator", "+966530262716", "en", "Asia/Riyadh", now, now, now);
-  insertUser.run(investorId, "investor@partner-capital.sa", passwordHash, "Khalid", "Al-Mansoor", "Partner Capital", "Investment Principal", "", "en", "Asia/Riyadh", now, now, now);
-  insertUser.run(advisorId, "counsel@legal-advisors.sa", passwordHash, "Sara", "Al-Harbi", "Legal Advisors LLP", "Senior Counsel", "", "en", "Asia/Riyadh", now, now, now);
+  await insertUser.run(adminId, "ahmed.badran@kleen.sa", passwordHash, "Ahmed", "Badran", "Kleen", "Data Room Administrator", "+966530262716", "en", "Asia/Riyadh", now, now, now);
+  await insertUser.run(investorId, "investor@partner-capital.sa", passwordHash, "Khalid", "Al-Mansoor", "Partner Capital", "Investment Principal", "", "en", "Asia/Riyadh", now, now, now);
+  await insertUser.run(advisorId, "counsel@legal-advisors.sa", passwordHash, "Sara", "Al-Harbi", "Legal Advisors LLP", "Senior Counsel", "", "en", "Asia/Riyadh", now, now, now);
+
+  const envFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID || process.env.GOOGLE_DRIVE_FOLDER_ID || "";
+  const hasServiceAccount = Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && envFolderId);
 
   const projectId = id("prj");
-  db.prepare(`
+  await db.prepare(`
     INSERT INTO projects (
       id, name, slug, projectCode, status, projectType, storageLocation, themeColor,
-      driveRootFolderName, driveAuthMode, lastSyncedAt, lastSyncStatus,
+      driveRootFolderId, driveRootFolderName, driveAuthMode, lastSyncedAt, lastSyncStatus,
       adminEmail, adminPhone, createdAt, updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     projectId,
     "Kleen_2025",
@@ -42,9 +45,10 @@ export function seedIfEmpty(db: DatabaseSync) {
     "Fundraising",
     "Google Drive Mirror",
     "#007AFF",
-    "Kleen_2025 (Google Drive Mirror)",
-    "demo",
-    now,
+    envFolderId,
+    "Kleen Data Room",
+    hasServiceAccount ? "service_account" : "demo",
+    hasServiceAccount ? null : now,
     "synced",
     "ahmed.badran@kleen.sa",
     "+966530262716",
@@ -55,8 +59,8 @@ export function seedIfEmpty(db: DatabaseSync) {
   const insertHistory = db.prepare(
     "INSERT INTO project_status_history (id, projectId, status, actorName, note, createdAt) VALUES (?, ?, ?, ?, ?, ?)"
   );
-  insertHistory.run(id("hist"), projectId, "Project created", "System", "Initial data room created", "2025-03-12T09:00:00.000Z");
-  insertHistory.run(id("hist"), projectId, "Project reopened (Live)", "Ahmed Badran", "Live investor access enabled", "2026-02-09T10:30:00.000Z");
+  await insertHistory.run(id("hist"), projectId, "Project created", "System", "Initial data room created", "2025-03-12T09:00:00.000Z");
+  await insertHistory.run(id("hist"), projectId, "Project reopened (Live)", "Ahmed Badran", "Live investor access enabled", "2026-02-09T10:30:00.000Z");
 
   const integrations = [
     ["chatgpt", "ChatGPT", "chatgpt.com"],
@@ -73,7 +77,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     "INSERT INTO project_integrations (id, projectId, key, name, domain, enabled) VALUES (?, ?, ?, ?, ?, ?)"
   );
   for (const [key, name, domain] of integrations) {
-    insertInt.run(id("int"), projectId, key, name, domain, 0);
+    await insertInt.run(id("int"), projectId, key, name, domain, 0);
   }
 
   const adminGroupId = id("grp");
@@ -83,7 +87,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     INSERT INTO groups (id, projectId, name, role, isDefaultAdmin, featurePermissionsJson, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertGroup.run(
+  await insertGroup.run(
     adminGroupId,
     projectId,
     "Administrators",
@@ -103,7 +107,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     now,
     now
   );
-  insertGroup.run(
+  await insertGroup.run(
     investorGroupId,
     projectId,
     "Investor Group",
@@ -119,7 +123,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     now,
     now
   );
-  insertGroup.run(
+  await insertGroup.run(
     legalGroupId,
     projectId,
     "Legal Advisors",
@@ -140,9 +144,9 @@ export function seedIfEmpty(db: DatabaseSync) {
     INSERT INTO project_participants (id, projectId, userId, groupId, status, lastSignInAt, addedBy, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertPart.run(id("prt"), projectId, adminId, adminGroupId, "Engaged", now, "System", now, now);
-  insertPart.run(id("prt"), projectId, investorId, investorGroupId, "Engaged", new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), "Ahmed Badran", now, now);
-  insertPart.run(id("prt"), projectId, advisorId, legalGroupId, "Signed in", new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(), "Ahmed Badran", now, now);
+  await insertPart.run(id("prt"), projectId, adminId, adminGroupId, "Engaged", now, "System", now, now);
+  await insertPart.run(id("prt"), projectId, investorId, investorGroupId, "Engaged", new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), "Ahmed Badran", now, now);
+  await insertPart.run(id("prt"), projectId, advisorId, legalGroupId, "Signed in", new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString(), "Ahmed Badran", now, now);
 
   const nodes = [
     ["demo-f1", null, "1 الملف الاستثماري", 1, "application/vnd.google-apps.folder", "folder", "Folder", 0, 0, "1", 1, "2026-05-05T10:00:00Z", null],
@@ -198,7 +202,7 @@ export function seedIfEmpty(db: DatabaseSync) {
   for (const n of nodes) {
     const nid = id("nod");
     nodeIdMap[n[0]] = nid;
-    insertNode.run(nid, projectId, n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[11], n[12], now, now);
+    await insertNode.run(nid, projectId, n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[11], n[12], now, now);
   }
 
   const insertPerm = db.prepare(`
@@ -218,27 +222,27 @@ export function seedIfEmpty(db: DatabaseSync) {
     [legalGroupId, nodeIdMap["demo-f4"], "view"],
   ];
   for (const [g, n, lvl] of perms) {
-    insertPerm.run(id("prm"), projectId, g, n, lvl, "Ahmed Badran", now);
+    await insertPerm.run(id("prm"), projectId, g, n, lvl, "Ahmed Badran", now);
   }
 
   const insertNote = db.prepare(`
     INSERT INTO document_notes (id, projectId, nodeId, authorId, content, noteType, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertNote.run(id("not"), projectId, nodeIdMap["demo-f2"], adminId, "Updated cap table and investment briefs mirrored from Google Drive.", "Shared", now, now);
-  insertNote.run(id("not"), projectId, nodeIdMap["demo-f7-1"], adminId, "Executive bios verified for investor review.", "Private", now, now);
+  await insertNote.run(id("not"), projectId, nodeIdMap["demo-f2"], adminId, "Updated cap table and investment briefs mirrored from Google Drive.", "Shared", now, now);
+  await insertNote.run(id("not"), projectId, nodeIdMap["demo-f7-1"], adminId, "Executive bios verified for investor review.", "Private", now, now);
 
   const insertLabel = db.prepare(
     "INSERT INTO label_definitions (id, projectId, groupName, type, valuesJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)"
   );
-  insertLabel.run(id("lbl"), projectId, "Department", "Single", JSON.stringify(["Finance", "Legal", "Operations"]), now);
-  insertLabel.run(id("lbl"), projectId, "Review Status", "Single", JSON.stringify(["Verified", "Pending Audit", "Confidential"]), now);
+  await insertLabel.run(id("lbl"), projectId, "Department", "Single", JSON.stringify(["Finance", "Legal", "Operations"]), now);
+  await insertLabel.run(id("lbl"), projectId, "Review Status", "Single", JSON.stringify(["Verified", "Pending Audit", "Confidential"]), now);
 
   const insertTerms = db.prepare(`
     INSERT INTO terms_of_access (id, projectId, title, type, displayMode, assignedGroupIds, content, enabled, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertTerms.run(
+  await insertTerms.run(
     id("trm"),
     projectId,
     "NDA_Kleen_Investor_Group",
@@ -250,7 +254,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     now,
     now
   );
-  insertTerms.run(
+  await insertTerms.run(
     id("trm"),
     projectId,
     "Disclaimer",
@@ -267,7 +271,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     INSERT INTO qna_questions (id, projectId, code, subject, body, answer, status, priority, category, authorId, assignedTo, nodeId, isFaq, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertQna.run(
+  await insertQna.run(
     id("qna"),
     projectId,
     "B100",
@@ -284,7 +288,7 @@ export function seedIfEmpty(db: DatabaseSync) {
     now,
     now
   );
-  insertQna.run(
+  await insertQna.run(
     id("qna"),
     projectId,
     "B101",
@@ -306,19 +310,19 @@ export function seedIfEmpty(db: DatabaseSync) {
     INSERT INTO checklist_items (id, projectId, code, category, title, priority, status, assignedGroupId, linkedNodeId, createdAt, updatedAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  insertCheck.run(id("chk"), projectId, "DD-01", "Financial", "Audited Financial Statements (FY25)", "High", "Ready", investorGroupId, nodeIdMap["demo-4-3-5-1"], now, now);
-  insertCheck.run(id("chk"), projectId, "DD-02", "Tax", "Annual Zakat Declaration 2025", "High", "Ready", investorGroupId, nodeIdMap["demo-4-3-5-6"], now, now);
-  insertCheck.run(id("chk"), projectId, "DD-03", "Legal", "Commercial Registration & Articles", "Medium", "Ready", legalGroupId, nodeIdMap["demo-3-1-1"], now, now);
-  insertCheck.run(id("chk"), projectId, "DD-04", "Corporate", "5-Year Financial Model & Valuation", "High", "In Progress", investorGroupId, nodeIdMap["demo-4-2-1"], now, now);
+  await insertCheck.run(id("chk"), projectId, "DD-01", "Financial", "Audited Financial Statements (FY25)", "High", "Ready", investorGroupId, nodeIdMap["demo-4-3-5-1"], now, now);
+  await insertCheck.run(id("chk"), projectId, "DD-02", "Tax", "Annual Zakat Declaration 2025", "High", "Ready", investorGroupId, nodeIdMap["demo-4-3-5-6"], now, now);
+  await insertCheck.run(id("chk"), projectId, "DD-03", "Legal", "Commercial Registration & Articles", "Medium", "Ready", legalGroupId, nodeIdMap["demo-3-1-1"], now, now);
+  await insertCheck.run(id("chk"), projectId, "DD-04", "Corporate", "5-Year Financial Model & Valuation", "High", "In Progress", investorGroupId, nodeIdMap["demo-4-2-1"], now, now);
 
   const insertLog = db.prepare(`
     INSERT INTO activity_logs (id, projectId, userId, groupId, nodeId, actorName, actorEmail, groupName, category, action, description, durationSeconds, createdAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const ts = Date.now();
-  insertLog.run(id("log"), projectId, adminId, adminGroupId, null, "Ahmed Badran", "ahmed.badran@kleen.sa", "Administrators", "Drive sync", "Google Drive synced", "Mirrored folder tree Kleen_2025 (Read-Only Sync Mode)", 0, new Date(ts - 1000 * 60 * 15).toISOString());
-  insertLog.run(id("log"), projectId, investorId, investorGroupId, nodeIdMap["demo-1-1"], "Khalid Al-Mansoor", "investor@partner-capital.sa", "Investor Group", "Documents", "Document viewed", "1.1 Kleen Investment Deck 2026.pdf (12 pages)", 420, new Date(ts - 1000 * 60 * 60 * 3).toISOString());
-  insertLog.run(id("log"), projectId, investorId, investorGroupId, nodeIdMap["demo-4-3-5-1"], "Khalid Al-Mansoor", "investor@partner-capital.sa", "Investor Group", "Documents", "PDF downloaded", "4.3.5.1 Audited Financial Statements 2025.pdf (Watermarked)", 185, new Date(ts - 1000 * 60 * 60 * 4).toISOString());
-  insertLog.run(id("log"), projectId, advisorId, legalGroupId, nodeIdMap["demo-3-2-1"], "Sara Al-Harbi", "counsel@legal-advisors.sa", "Legal Advisors", "Documents", "Document viewed", "3.2.1 Central Hub Lease Agreement.pdf", 260, new Date(ts - 1000 * 60 * 60 * 24).toISOString());
-  insertLog.run(id("log"), projectId, adminId, adminGroupId, null, "Ahmed Badran", "ahmed.badran@kleen.sa", "Administrators", "Permissions", "Permissions assigned", "Target group: Investor Group | Folder: 4 Financial Documents | Level: PDF", 0, new Date(ts - 1000 * 60 * 60 * 48).toISOString());
+  await insertLog.run(id("log"), projectId, adminId, adminGroupId, null, "Ahmed Badran", "ahmed.badran@kleen.sa", "Administrators", "Drive sync", "Google Drive synced", "Mirrored folder tree Kleen_2025 (Read-Only Sync Mode)", 0, new Date(ts - 1000 * 60 * 15).toISOString());
+  await insertLog.run(id("log"), projectId, investorId, investorGroupId, nodeIdMap["demo-1-1"], "Khalid Al-Mansoor", "investor@partner-capital.sa", "Investor Group", "Documents", "Document viewed", "1.1 Kleen Investment Deck 2026.pdf (12 pages)", 420, new Date(ts - 1000 * 60 * 60 * 3).toISOString());
+  await insertLog.run(id("log"), projectId, investorId, investorGroupId, nodeIdMap["demo-4-3-5-1"], "Khalid Al-Mansoor", "investor@partner-capital.sa", "Investor Group", "Documents", "PDF downloaded", "4.3.5.1 Audited Financial Statements 2025.pdf (Watermarked)", 185, new Date(ts - 1000 * 60 * 60 * 4).toISOString());
+  await insertLog.run(id("log"), projectId, advisorId, legalGroupId, nodeIdMap["demo-3-2-1"], "Sara Al-Harbi", "counsel@legal-advisors.sa", "Legal Advisors", "Documents", "Document viewed", "3.2.1 Central Hub Lease Agreement.pdf", 260, new Date(ts - 1000 * 60 * 60 * 24).toISOString());
+  await insertLog.run(id("log"), projectId, adminId, adminGroupId, null, "Ahmed Badran", "ahmed.badran@kleen.sa", "Administrators", "Permissions", "Permissions assigned", "Target group: Investor Group | Folder: 4 Financial Documents | Level: PDF", 0, new Date(ts - 1000 * 60 * 60 * 48).toISOString());
 }

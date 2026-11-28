@@ -13,18 +13,18 @@ export async function GET(req: NextRequest) {
   const includeRecycle = req.nextUrl.searchParams.get("includeRecycle") === "true";
   const fromDate = req.nextUrl.searchParams.get("fromDate") || "";
 
-  const db = getDb();
-  const rawNodes = db
+  const db = await getDb();
+  const rawNodes = (await db
     .prepare(
       includeRecycle
         ? "SELECT * FROM drive_nodes WHERE projectId = ?"
         : "SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0"
     )
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
-  const permRows = db
+  const permRows = (await db
     .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-    .all(session.project.id, session.effectiveGroup.id) as Array<{ nodeId: string; level: string }>;
+    .all(session.project.id, session.effectiveGroup.id)) as Array<{ nodeId: string; level: string }>;
 
   const nodeLookup = new Map(
     rawNodes.map((n) => [String(n.id), { id: String(n.id), driveFileId: String(n.driveFileId), parentDriveId: n.parentDriveId ? String(n.parentDriveId) : null }])
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
   XLSX.utils.book_append_sheet(wb, ws, "Project Index");
   const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),

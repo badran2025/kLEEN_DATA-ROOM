@@ -12,19 +12,19 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   const { id } = await context.params;
   const format = req.nextUrl.searchParams.get("format") || "pdf"; // pdf | original
 
-  const db = getDb();
-  const nodeRow = db
+  const db = await getDb();
+  const nodeRow = (await db
     .prepare("SELECT * FROM drive_nodes WHERE id = ? AND projectId = ? AND isTrashed = 0")
-    .get(id, session.project.id) as Record<string, unknown> | undefined;
+    .get(id, session.project.id)) as Record<string, unknown> | undefined;
   if (!nodeRow) return NextResponse.json({ error: "Document not found" }, { status: 404 });
   const node = plain(nodeRow);
 
-  const rawNodes = db
+  const rawNodes = (await db
     .prepare("SELECT id, driveFileId, parentDriveId FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-    .all(session.project.id) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
-  const permRows = db
+    .all(session.project.id)) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
+  const permRows = (await db
     .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-    .all(session.project.id, session.effectiveGroup.id) as Array<{ nodeId: string; level: string }>;
+    .all(session.project.id, session.effectiveGroup.id)) as Array<{ nodeId: string; level: string }>;
 
   const eff = resolveEffectivePermission(
     id,
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     });
   }
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, nodeId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),

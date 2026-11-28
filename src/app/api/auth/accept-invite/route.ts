@@ -7,8 +7,8 @@ export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token") || "";
   if (!token) return NextResponse.json({ error: "Invitation token missing." }, { status: 400 });
 
-  const db = getDb();
-  const row = db
+  const db = await getDb();
+  const row = (await db
     .prepare(
       `SELECT pp.id, pp.projectId, pp.userId, pp.accessEnabled, pp.accessStart, pp.accessEnd,
               u.email, u.firstName, u.lastName, p.name as projectName, g.name as groupName
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
        JOIN groups g ON g.id = pp.groupId
        WHERE pp.inviteToken = ?`
     )
-    .get(token) as
+    .get(token)) as
     | {
         id: string;
         projectId: string;
@@ -64,8 +64,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Password must be at least 6 characters." }, { status: 400 });
   }
 
-  const db = getDb();
-  const row = db
+  const db = await getDb();
+  const row = (await db
     .prepare(
       `SELECT pp.id as partId, pp.projectId, pp.userId, pp.groupId, pp.accessEnabled, pp.accessStart, pp.accessEnd,
               u.email, u.firstName, u.lastName, g.name as groupName
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
        JOIN groups g ON g.id = pp.groupId
        WHERE pp.inviteToken = ?`
     )
-    .get(token) as
+    .get(token)) as
     | {
         partId: string;
         projectId: string;
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
 
   const now = nowIso();
   const hash = await bcrypt.hash(password, 10);
-  db.prepare(
+  await db.prepare(
     `UPDATE users SET
       passwordHash = ?,
       firstName = COALESCE(?, firstName),
@@ -116,12 +116,12 @@ export async function POST(req: NextRequest) {
     WHERE id = ?`
   ).run(hash, firstName, lastName, now, now, row.userId);
 
-  db.prepare(
+  await db.prepare(
     "UPDATE project_participants SET status = 'Signed in', lastSignInAt = ?, inviteToken = NULL, updatedAt = ? WHERE id = ?"
   ).run(now, now, row.partId);
 
   const displayName = `${firstName || row.firstName} ${lastName ?? row.lastName}`.trim();
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),

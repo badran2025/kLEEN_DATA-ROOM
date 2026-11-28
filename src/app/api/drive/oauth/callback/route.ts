@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
   try {
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     const { tokens } = await oauth2Client.getToken(code);
-    const db = getDb();
-    db.prepare("UPDATE projects SET driveAuthMode = 'oauth', driveOAuthTokensJson = ?, updatedAt = ? WHERE id = ?").run(
+    const db = await getDb();
+    await db.prepare("UPDATE projects SET driveAuthMode = 'oauth', driveOAuthTokensJson = ?, updatedAt = ? WHERE id = ?").run(
       JSON.stringify(tokens),
       nowIso(),
       projectId

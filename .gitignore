@@ -19,6 +19,10 @@ npm-debug.log*
 .env
 .env*.local
 
+# netlify local link state
+/.netlify
+/.netlify/state.json
+
 # local sqlite database & uploads
 /data/*.db
 /data/*.db-journal

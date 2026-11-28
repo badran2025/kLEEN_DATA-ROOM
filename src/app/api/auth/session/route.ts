@@ -8,10 +8,10 @@ export async function GET() {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
 
-  const db = getDb();
-  const activeTerms = db
+  const db = await getDb();
+  const activeTerms = (await db
     .prepare("SELECT * FROM terms_of_access WHERE projectId = ? AND enabled = 1")
-    .all(session.project.id) as Array<{
+    .all(session.project.id)) as Array<{
     id: string;
     title: string;
     type: string;
@@ -31,12 +31,12 @@ export async function GET() {
 
     if (t.displayMode === "On each sign-in") {
       const cutoff = new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString();
-      const recent = db
+      const recent = await db
         .prepare("SELECT id FROM terms_acceptances WHERE termsId = ? AND userId = ? AND acceptedAt >= ?")
         .get(t.id, session.user.id, cutoff);
       if (!recent) pendingTerms.push(plain(t));
     } else {
-      const accepted = db
+      const accepted = await db
         .prepare("SELECT id FROM terms_acceptances WHERE termsId = ? AND userId = ?")
         .get(t.id, session.user.id);
       if (!accepted) pendingTerms.push(plain(t));
@@ -44,36 +44,37 @@ export async function GET() {
   }
 
   const allProjects = (
-    db
+    (await db
       .prepare("SELECT id, name, slug, status, isFavorite, updatedAt FROM projects ORDER BY createdAt ASC")
-      .all() as Array<Record<string, unknown>>
+      .all()) as Array<Record<string, unknown>>
   ).map((p) => ({
     ...plain(p),
     isFavorite: p.isFavorite === 1,
   }));
 
-  const groupRows = db
+  const groupRows = (await db
     .prepare("SELECT * FROM groups WHERE projectId = ? AND isDeleted = 0 ORDER BY name ASC")
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
-  const groups = groupRows.map((g) => {
+  const groups = [];
+  for (const g of groupRows) {
     const mapped = mapGroup(plain(g));
-    const members = db
+    const members = (await db
       .prepare(
         `SELECT u.id, u.firstName, u.lastName, u.email, pp.status
          FROM project_participants pp
          JOIN users u ON u.id = pp.userId
          WHERE pp.projectId = ? AND pp.groupId = ?`
       )
-      .all(session.project.id, mapped.id) as Array<{
+      .all(session.project.id, mapped.id)) as Array<{
       id: string;
       firstName: string;
       lastName: string;
       email: string;
       status: string;
     }>;
-    return { ...mapped, members: members.map((m) => plain(m)) };
-  });
+    groups.push({ ...mapped, members: members.map((m) => plain(m)) });
+  }
 
   return NextResponse.json({
     authenticated: true,
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
 
   if (body.action === "view-as") {
     if (!session.isTrueAdmin) {
@@ -113,8 +114,8 @@ export async function POST(req: NextRequest) {
       viewAsGroupId: groupId,
     });
     if (groupId) {
-      const targetGroup = db.prepare("SELECT name FROM groups WHERE id = ?").get(groupId) as { name: string } | undefined;
-      db.prepare(
+      const targetGroup = (await db.prepare("SELECT name FROM groups WHERE id = ?").get(groupId)) as { name: string } | undefined;
+      await db.prepare(
         "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
         uid("log"),
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.action === "switch-project" && body.projectId) {
-    const targetProject = db.prepare("SELECT id FROM projects WHERE id = ?").get(String(body.projectId));
+    const targetProject = await db.prepare("SELECT id FROM projects WHERE id = ?").get(String(body.projectId));
     if (!targetProject) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     await setSessionCookie({
       userId: session.user.id,

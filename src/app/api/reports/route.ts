@@ -8,36 +8,36 @@ export async function GET(req: NextRequest) {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const db = getDb();
+  const db = await getDb();
   const exportType = req.nextUrl.searchParams.get("export");
 
   const logs = (
-    db
+    (await db
       .prepare("SELECT * FROM activity_logs WHERE projectId = ? ORDER BY createdAt DESC LIMIT 500")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((l) => plain(l));
 
   const groups = (
-    db
+    (await db
       .prepare("SELECT * FROM groups WHERE projectId = ?")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((g) => ({ ...plain(g), isDeleted: g.isDeleted === 1 }));
 
   const participants = (
-    db
+    (await db
       .prepare(
         `SELECT pp.*, u.email, u.firstName, u.lastName
          FROM project_participants pp
          JOIN users u ON u.id = pp.userId
          WHERE pp.projectId = ?`
       )
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((p) => plain(p));
 
   const nodes = (
-    db
+    (await db
       .prepare("SELECT * FROM drive_nodes WHERE projectId = ?")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((n): Record<string, unknown> => ({
     ...plain(n),
     isFolder: n.isFolder === 1,
@@ -46,15 +46,15 @@ export async function GET(req: NextRequest) {
   }));
 
   const subscriptions = (
-    db
+    (await db
       .prepare("SELECT * FROM report_subscriptions WHERE projectId = ? ORDER BY createdAt DESC")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((s) => ({ ...plain(s), enabled: s.enabled === 1 }));
 
   const permissions = (
-    db
+    (await db
       .prepare("SELECT * FROM document_permissions WHERE projectId = ?")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((p) => plain(p));
 
   if (exportType === "dashboard-pdf") {
@@ -150,12 +150,12 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
 
   if (body.action === "subscribe") {
     const id = uid("sub");
-    db.prepare(
+    await db.prepare(
       "INSERT INTO report_subscriptions (id, projectId, userId, name, reportType, format, frequency, startAt, filtersJson, enabled, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
     ).run(
       id,
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
       now
     );
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -189,7 +189,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.action === "toggle-subscription" && body.id) {
-    db.prepare("UPDATE report_subscriptions SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ? AND projectId = ?").run(
+    await db.prepare("UPDATE report_subscriptions SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE id = ? AND projectId = ?").run(
       String(body.id),
       session.project.id
     );
@@ -197,7 +197,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.action === "delete-subscription" && body.id) {
-    db.prepare("DELETE FROM report_subscriptions WHERE id = ? AND projectId = ?").run(String(body.id), session.project.id);
+    await db.prepare("DELETE FROM report_subscriptions WHERE id = ? AND projectId = ?").run(String(body.id), session.project.id);
     return NextResponse.json({ ok: true });
   }
 

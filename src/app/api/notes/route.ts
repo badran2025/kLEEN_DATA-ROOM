@@ -7,9 +7,9 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const nodeId = req.nextUrl.searchParams.get("nodeId");
-  const db = getDb();
+  const db = await getDb();
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT n.*, u.firstName, u.lastName, u.email, d.name as nodeName, d.dotIndex as nodeIndex, d.parentDriveId
        FROM document_notes n
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
        WHERE n.projectId = ? ${nodeId ? "AND n.nodeId = ?" : ""}
        ORDER BY n.createdAt DESC`
     )
-    .all(...(nodeId ? [session.project.id, nodeId] : [session.project.id])) as Array<Record<string, unknown>>;
+    .all(...(nodeId ? [session.project.id, nodeId] : [session.project.id]))) as Array<Record<string, unknown>>;
 
   const visible = rows
     .map((r) => plain(r))
@@ -37,15 +37,15 @@ export async function POST(req: NextRequest) {
   const noteType = body.noteType === "Shared" ? "Shared" : "Private";
   if (!nodeId || !content) return NextResponse.json({ error: "Node and content required" }, { status: 400 });
 
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
   const noteId = uid("not");
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO document_notes (id, projectId, nodeId, authorId, content, noteType, repliesJson, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)"
   ).run(noteId, session.project.id, nodeId, session.user.id, content, noteType, now, now);
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, nodeId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),
@@ -71,8 +71,8 @@ export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Note ID required" }, { status: 400 });
 
-  const db = getDb();
-  db.prepare("DELETE FROM document_notes WHERE id = ? AND projectId = ? AND (authorId = ? OR ? = 1)").run(
+  const db = await getDb();
+  await db.prepare("DELETE FROM document_notes WHERE id = ? AND projectId = ? AND (authorId = ? OR ? = 1)").run(
     id,
     session.project.id,
     session.user.id,

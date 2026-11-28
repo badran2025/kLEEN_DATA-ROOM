@@ -9,14 +9,14 @@ export async function GET(req: NextRequest) {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const db = getDb();
+  const db = await getDb();
   const format = req.nextUrl.searchParams.get("format");
 
-  const groupRows = db
+  const groupRows = (await db
     .prepare("SELECT * FROM groups WHERE projectId = ? AND isDeleted = 0 ORDER BY isDefaultAdmin DESC, name ASC")
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
-  const partRows = db
+  const partRows = (await db
     .prepare(
       `SELECT pp.*, u.email, u.firstName, u.lastName, u.company, u.jobTitle, u.twoFactorEnabled
        FROM project_participants pp
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
        WHERE pp.projectId = ?
        ORDER BY pp.createdAt ASC`
     )
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
   const groups = groupRows.map((g) => {
     const mapped = mapGroup(plain(g));
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
 
   if (body.action === "create-group") {
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     if (!name) return NextResponse.json({ error: "Group name is required" }, { status: 400 });
 
     const gid = uid("grp");
-    db.prepare(
+    await db.prepare(
       `INSERT INTO groups (id, projectId, name, role, featurePermissionsJson, aiIntegrationsJson, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
       now
     );
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -144,22 +144,22 @@ export async function POST(req: NextRequest) {
       const firstName = nameParts[0] || "Participant";
       const lastName = nameParts.slice(1).join(" ") || "";
 
-      let user = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | undefined;
+      let user = (await db.prepare("SELECT id FROM users WHERE email = ?").get(email)) as { id: string } | undefined;
       if (!user) {
         const newUid = uid("usr");
-        db.prepare(
+        await db.prepare(
           "INSERT INTO users (id, email, passwordHash, firstName, lastName, passwordChangedAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         ).run(newUid, email, defaultHash, firstName, lastName, now, now, now);
         user = { id: newUid };
       }
 
       const inviteToken = crypto.randomBytes(18).toString("hex");
-      const exists = db
+      const exists = (await db
         .prepare("SELECT id FROM project_participants WHERE projectId = ? AND userId = ?")
-        .get(session.project.id, user.id) as { id: string } | undefined;
+        .get(session.project.id, user.id)) as { id: string } | undefined;
 
       if (!exists) {
-        db.prepare(
+        await db.prepare(
           `INSERT INTO project_participants (
             id, projectId, userId, groupId, status, accessEnabled, accessStart, accessEnd,
             require2fa, allowedIps, docNotifications, invitationLanguage, addedBy, inviteToken, createdAt, updatedAt
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
         );
         addedCount++;
       } else {
-        db.prepare(
+        await db.prepare(
           "UPDATE project_participants SET groupId = ?, accessEnabled = ?, accessStart = ?, accessEnd = ?, require2fa = ?, allowedIps = ?, inviteToken = ?, updatedAt = ? WHERE id = ?"
         ).run(groupId, accessEnabled, accessStart, accessEnd, require2fa, allowedIps, inviteToken, now, exists.id);
       }
@@ -192,26 +192,26 @@ export async function POST(req: NextRequest) {
 
     if (Array.isArray(body.assignedTermsIds) && body.assignedTermsIds.length > 0) {
       for (const tid of body.assignedTermsIds as string[]) {
-        const termRow = db
+        const termRow = (await db
           .prepare("SELECT id, assignedGroupIds FROM terms_of_access WHERE id = ? AND projectId = ?")
-          .get(String(tid), session.project.id) as { id: string; assignedGroupIds: string } | undefined;
+          .get(String(tid), session.project.id)) as { id: string; assignedGroupIds: string } | undefined;
         if (termRow) {
           const currentGroups: string[] = JSON.parse(termRow.assignedGroupIds || "[]");
           if (currentGroups.length > 0 && !currentGroups.includes(groupId)) {
             currentGroups.push(groupId);
-            db.prepare("UPDATE terms_of_access SET assignedGroupIds = ?, enabled = 1, updatedAt = ? WHERE id = ?").run(
+            await db.prepare("UPDATE terms_of_access SET assignedGroupIds = ?, enabled = 1, updatedAt = ? WHERE id = ?").run(
               JSON.stringify(currentGroups),
               now,
               termRow.id
             );
           } else {
-            db.prepare("UPDATE terms_of_access SET enabled = 1, updatedAt = ? WHERE id = ?").run(now, termRow.id);
+            await db.prepare("UPDATE terms_of_access SET enabled = 1, updatedAt = ? WHERE id = ?").run(now, termRow.id);
           }
         }
       }
     }
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -236,17 +236,17 @@ export async function POST(req: NextRequest) {
 
   if (body.action === "resend-invite" && body.participantId) {
     const inviteToken = crypto.randomBytes(18).toString("hex");
-    db.prepare("UPDATE project_participants SET inviteToken = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+    await db.prepare("UPDATE project_participants SET inviteToken = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
       inviteToken,
       now,
       String(body.participantId),
       session.project.id
     );
-    const row = db
+    const row = (await db
       .prepare(
         "SELECT u.email FROM project_participants pp JOIN users u ON u.id = pp.userId WHERE pp.id = ?"
       )
-      .get(String(body.participantId)) as { email: string } | undefined;
+      .get(String(body.participantId))) as { email: string } | undefined;
     return NextResponse.json({ ok: true, inviteToken, email: row?.email || "" });
   }
 
@@ -259,38 +259,38 @@ export async function PATCH(req: NextRequest) {
   if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
 
   if (body.targetType === "group" && body.groupId) {
     const gid = String(body.groupId);
     if (body.action === "rename" && body.name) {
-      db.prepare("UPDATE groups SET name = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      await db.prepare("UPDATE groups SET name = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
         String(body.name),
         now,
         gid,
         session.project.id
       );
     } else if (body.action === "deactivate") {
-      db.prepare("UPDATE groups SET accessEnabled = 0, updatedAt = ? WHERE id = ? AND projectId = ? AND isDefaultAdmin = 0").run(
+      await db.prepare("UPDATE groups SET accessEnabled = 0, updatedAt = ? WHERE id = ? AND projectId = ? AND isDefaultAdmin = 0").run(
         now,
         gid,
         session.project.id
       );
     } else if (body.action === "activate") {
-      db.prepare("UPDATE groups SET accessEnabled = 1, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      await db.prepare("UPDATE groups SET accessEnabled = 1, updatedAt = ? WHERE id = ? AND projectId = ?").run(
         now,
         gid,
         session.project.id
       );
     } else if (body.action === "delete") {
-      db.prepare("UPDATE groups SET isDeleted = 1, updatedAt = ? WHERE id = ? AND projectId = ? AND isDefaultAdmin = 0").run(
+      await db.prepare("UPDATE groups SET isDeleted = 1, updatedAt = ? WHERE id = ? AND projectId = ? AND isDefaultAdmin = 0").run(
         now,
         gid,
         session.project.id
       );
     } else if (body.action === "update-settings") {
-      db.prepare(
+      await db.prepare(
         `UPDATE groups SET
           role = COALESCE(?, role),
           featurePermissionsJson = COALESCE(?, featurePermissionsJson),
@@ -322,28 +322,28 @@ export async function PATCH(req: NextRequest) {
   if (body.targetType === "participant" && body.participantId) {
     const pid = String(body.participantId);
     if (body.action === "move-group" && body.groupId) {
-      db.prepare("UPDATE project_participants SET groupId = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      await db.prepare("UPDATE project_participants SET groupId = ?, updatedAt = ? WHERE id = ? AND projectId = ?").run(
         String(body.groupId),
         now,
         pid,
         session.project.id
       );
     } else if (body.action === "deactivate") {
-      db.prepare("UPDATE project_participants SET accessEnabled = 0, status = 'Deactivated', updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      await db.prepare("UPDATE project_participants SET accessEnabled = 0, status = 'Deactivated', updatedAt = ? WHERE id = ? AND projectId = ?").run(
         now,
         pid,
         session.project.id
       );
     } else if (body.action === "activate") {
-      db.prepare("UPDATE project_participants SET accessEnabled = 1, status = 'Signed in', updatedAt = ? WHERE id = ? AND projectId = ?").run(
+      await db.prepare("UPDATE project_participants SET accessEnabled = 1, status = 'Signed in', updatedAt = ? WHERE id = ? AND projectId = ?").run(
         now,
         pid,
         session.project.id
       );
     } else if (body.action === "delete") {
-      db.prepare("DELETE FROM project_participants WHERE id = ? AND projectId = ?").run(pid, session.project.id);
+      await db.prepare("DELETE FROM project_participants WHERE id = ? AND projectId = ?").run(pid, session.project.id);
     } else if (body.action === "update-settings") {
-      db.prepare(
+      await db.prepare(
         `UPDATE project_participants SET
           groupId = COALESCE(?, groupId),
           accessEnabled = COALESCE(?, accessEnabled),

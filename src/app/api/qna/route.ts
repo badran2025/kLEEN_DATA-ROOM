@@ -6,8 +6,8 @@ export async function GET() {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const db = getDb();
-  const rows = db
+  const db = await getDb();
+  const rows = (await db
     .prepare(
       `SELECT q.*, u.firstName, u.lastName, u.email, d.name as nodeName, d.dotIndex as nodeIndex
        FROM qna_questions q
@@ -16,7 +16,7 @@ export async function GET() {
        WHERE q.projectId = ?
        ORDER BY q.createdAt DESC`
     )
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
   return NextResponse.json({
     questions: rows.map((r) => ({ ...plain(r), isFaq: r.isFaq === 1 })),
@@ -32,13 +32,13 @@ export async function POST(req: NextRequest) {
   const questionBody = String(body.body || "").trim();
   if (!subject) return NextResponse.json({ error: "Subject is required" }, { status: 400 });
 
-  const db = getDb();
-  const countRow = db.prepare("SELECT COUNT(*) as c FROM qna_questions WHERE projectId = ?").get(session.project.id) as { c: number };
-  const code = `B${100 + (countRow?.c || 0)}`;
+  const db = await getDb();
+  const countRow = (await db.prepare("SELECT COUNT(*) as c FROM qna_questions WHERE projectId = ?").get(session.project.id)) as { c: number };
+  const code = `B${100 + Number(countRow?.c || 0)}`;
   const now = nowIso();
   const id = uid("qna");
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO qna_questions (id, projectId, code, subject, body, status, priority, category, authorId, assignedTo, nodeId, isFaq, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
   ).run(
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     now
   );
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),
@@ -83,9 +83,9 @@ export async function PATCH(req: NextRequest) {
   const id = String(body.id || "");
   if (!id) return NextResponse.json({ error: "Question ID required" }, { status: 400 });
 
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
-  db.prepare(
+  await db.prepare(
     `UPDATE qna_questions SET
       answer = COALESCE(?, answer),
       status = COALESCE(?, status),

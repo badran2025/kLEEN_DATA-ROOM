@@ -33,11 +33,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const db = getDb();
+    const db = await getDb();
 
     if (body.action === "rebuild-index") {
-      const count = rebuildProjectIndices(session.project.id, Boolean(body.preserveLeading ?? true));
-      db.prepare(
+      const count = await rebuildProjectIndices(session.project.id, Boolean(body.preserveLeading ?? true));
+      await db.prepare(
         "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
         uid("log"),
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
       }
 
       params.push(session.project.id);
-      db.prepare(`UPDATE projects SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+      await db.prepare(`UPDATE projects SET ${updates.join(", ")} WHERE id = ?`).run(...params);
 
       if (body.syncImmediately !== false) {
         const result = await syncProjectWithGoogleDrive(session.project.id, {

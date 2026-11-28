@@ -14,8 +14,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
     }
 
-    const db = getDb();
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as
+    const db = await getDb();
+    const user = (await db.prepare("SELECT * FROM users WHERE email = ?").get(email)) as
       | { id: string; email: string; passwordHash: string; firstName: string; lastName: string }
       | undefined;
     if (!user) {
@@ -28,8 +28,8 @@ export async function POST(req: NextRequest) {
     }
 
     const project = (projectSlug
-      ? db.prepare("SELECT * FROM projects WHERE slug = ?").get(projectSlug)
-      : db.prepare("SELECT * FROM projects ORDER BY createdAt ASC LIMIT 1").get()) as
+      ? await db.prepare("SELECT * FROM projects WHERE slug = ?").get(projectSlug)
+      : await db.prepare("SELECT * FROM projects ORDER BY createdAt ASC LIMIT 1").get()) as
       | { id: string; slug: string; status: string }
       | undefined;
 
@@ -37,9 +37,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No Data Room project found." }, { status: 404 });
     }
 
-    const participation = db
+    const participation = (await db
       .prepare("SELECT * FROM project_participants WHERE projectId = ? AND userId = ?")
-      .get(project.id, user.id) as
+      .get(project.id, user.id)) as
       | { id: string; groupId: string; status: string; accessEnabled: number; accessStart: string | null; accessEnd: string | null }
       | undefined;
 
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const group = db.prepare("SELECT * FROM groups WHERE id = ?").get(participation.groupId) as
+    const group = (await db.prepare("SELECT * FROM groups WHERE id = ?").get(participation.groupId)) as
       | { id: string; name: string; role: string; accessEnabled: number; isDeleted: number }
       | undefined;
 
@@ -74,14 +74,14 @@ export async function POST(req: NextRequest) {
     }
 
     const now = nowIso();
-    db.prepare("UPDATE project_participants SET lastSignInAt = ?, status = ?, updatedAt = ? WHERE id = ?").run(
+    await db.prepare("UPDATE project_participants SET lastSignInAt = ?, status = ?, updatedAt = ? WHERE id = ?").run(
       now,
       participation.status === "Invited" ? "Signed in" : participation.status,
       now,
       participation.id
     );
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, groupId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),

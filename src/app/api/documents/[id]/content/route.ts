@@ -5,13 +5,13 @@ import { getNodeContentBuffer } from "@/lib/drive-sync";
 import { canAccessNode, resolveEffectivePermission } from "@/lib/permissions";
 
 async function resolvePermissionForNode(projectId: string, groupId: string, groupRole: string, nodeId: string) {
-  const db = getDb();
-  const rawNodes = db
+  const db = await getDb();
+  const rawNodes = (await db
     .prepare("SELECT id, driveFileId, parentDriveId FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-    .all(projectId) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
-  const permRows = db
+    .all(projectId)) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
+  const permRows = (await db
     .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-    .all(projectId, groupId) as Array<{ nodeId: string; level: string }>;
+    .all(projectId, groupId)) as Array<{ nodeId: string; level: string }>;
 
   const nodeMap = new Map(rawNodes.map((n) => [n.id, n]));
   const driveIdToNodeId = new Map(rawNodes.map((n) => [n.driveFileId, n.id]));
@@ -24,10 +24,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await context.params;
-  const db = getDb();
-  const nodeRow = db
+  const db = await getDb();
+  const nodeRow = (await db
     .prepare("SELECT * FROM drive_nodes WHERE id = ? AND projectId = ? AND isTrashed = 0")
-    .get(id, session.project.id) as Record<string, unknown> | undefined;
+    .get(id, session.project.id)) as Record<string, unknown> | undefined;
   if (!nodeRow) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 
   const node = plain(nodeRow);
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   // Log view event
   const logId = uid("log");
   const now = nowIso();
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, nodeId, actorName, actorEmail, groupName, category, action, description, durationSeconds, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     logId,
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     now
   );
 
-  db.prepare("UPDATE project_participants SET status = 'Engaged', updatedAt = ? WHERE projectId = ? AND userId = ?").run(
+  await db.prepare("UPDATE project_participants SET status = 'Engaged', updatedAt = ? WHERE projectId = ? AND userId = ?").run(
     now,
     session.project.id,
     session.user.id
@@ -103,9 +103,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   const logId = body.logId ? String(body.logId) : null;
   const addSeconds = Math.max(1, Math.min(60, Number(body.seconds || 10)));
 
-  const db = getDb();
+  const db = await getDb();
   if (logId) {
-    db.prepare("UPDATE activity_logs SET durationSeconds = durationSeconds + ? WHERE id = ? AND projectId = ? AND nodeId = ?").run(
+    await db.prepare("UPDATE activity_logs SET durationSeconds = durationSeconds + ? WHERE id = ? AND projectId = ? AND nodeId = ?").run(
       addSeconds,
       logId,
       session.project.id,

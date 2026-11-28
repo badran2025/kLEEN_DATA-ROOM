@@ -9,12 +9,12 @@ export async function GET(req: NextRequest) {
   const session = await getCurrentSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const db = getDb();
+  const db = await getDb();
   const exportMode = req.nextUrl.searchParams.get("export");
   const accId = req.nextUrl.searchParams.get("id");
 
   if (exportMode === "accepted-term-pdf" && accId) {
-    const row = db
+    const row = (await db
       .prepare(
         `SELECT ta.*, u.email, u.firstName, u.lastName, u.company, u.jobTitle,
                 t.title as termsTitle, t.type as termsType, t.content as termsContent, t.updatedAt as termsUpdatedAt,
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
          LEFT JOIN groups g ON g.id = pp.groupId
          WHERE ta.id = ? AND t.projectId = ?`
       )
-      .get(accId, session.project.id) as Record<string, unknown> | undefined;
+      .get(accId, session.project.id)) as Record<string, unknown> | undefined;
 
     if (!row) return NextResponse.json({ error: "Acceptance record not found" }, { status: 404 });
 
@@ -68,23 +68,23 @@ export async function GET(req: NextRequest) {
   }
 
   const statusHistory = (
-    db.prepare("SELECT * FROM project_status_history WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM project_status_history WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((h) => plain(h));
 
   const integrations = (
-    db.prepare("SELECT * FROM project_integrations WHERE projectId = ? ORDER BY name ASC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM project_integrations WHERE projectId = ? ORDER BY name ASC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((i) => ({ ...plain(i), enabled: i.enabled === 1 }));
 
   const labels = (
-    db.prepare("SELECT * FROM label_definitions WHERE projectId = ? ORDER BY createdAt ASC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM label_definitions WHERE projectId = ? ORDER BY createdAt ASC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((l) => plain(l));
 
   const terms = (
-    db.prepare("SELECT * FROM terms_of_access WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM terms_of_access WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((t) => ({ ...plain(t), enabled: t.enabled === 1 }));
 
   const acceptances = (
-    db
+    (await db
       .prepare(
         `SELECT ta.id, ta.termsId, ta.acceptedAt, ta.publishedAt, ta.groupName, ta.acceptedContent,
                 u.id as userId, u.email, u.firstName, u.lastName, u.company, u.jobTitle,
@@ -98,11 +98,11 @@ export async function GET(req: NextRequest) {
          WHERE t.projectId = ?
          ORDER BY ta.acceptedAt DESC`
       )
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((a) => plain(a));
 
   const archives = (
-    db.prepare("SELECT * FROM archive_orders WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM archive_orders WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((a) => plain(a));
 
   return NextResponse.json({ statusHistory, integrations, labels, terms, acceptances, archives });
@@ -113,14 +113,14 @@ export async function PATCH(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
   const actor = `${session.user.firstName} ${session.user.lastName}`.trim();
 
   if (body.scope === "personal") {
     if (body.action === "change-password" && body.newPassword) {
       const hash = await bcrypt.hash(String(body.newPassword), 10);
-      db.prepare("UPDATE users SET passwordHash = ?, passwordChangedAt = ?, updatedAt = ? WHERE id = ?").run(
+      await db.prepare("UPDATE users SET passwordHash = ?, passwordChangedAt = ?, updatedAt = ? WHERE id = ?").run(
         hash,
         now,
         now,
@@ -129,7 +129,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    db.prepare(
+    await db.prepare(
       `UPDATE users SET
         firstName = COALESCE(?, firstName),
         lastName = COALESCE(?, lastName),
@@ -163,11 +163,11 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "accept-terms" && body.termsId) {
-    const termRow = db
+    const termRow = (await db
       .prepare("SELECT content, updatedAt FROM terms_of_access WHERE id = ? AND projectId = ?")
-      .get(String(body.termsId), session.project.id) as { content: string; updatedAt: string } | undefined;
+      .get(String(body.termsId), session.project.id)) as { content: string; updatedAt: string } | undefined;
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO terms_acceptances (id, termsId, userId, acceptedAt, acceptedContent, groupName, publishedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("acc"),
@@ -241,15 +241,15 @@ export async function PATCH(req: NextRequest) {
     if (sets.length > 0) {
       sets.push("updatedAt = ?");
       params.push(now, session.project.id);
-      db.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+      await db.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...params);
 
       if (typeof allowed.status === "string" && allowed.status !== session.project.status) {
-        db.prepare(
+        await db.prepare(
           "INSERT INTO project_status_history (id, projectId, status, actorName, note, createdAt) VALUES (?, ?, ?, ?, ?, ?)"
         ).run(uid("hist"), session.project.id, `Project status: ${allowed.status}`, actor, "", now);
       }
 
-      db.prepare(
+      await db.prepare(
         "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
         uid("log"),
@@ -268,7 +268,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "toggle-integration" && body.key) {
-    db.prepare("UPDATE project_integrations SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE projectId = ? AND key = ?").run(
+    await db.prepare("UPDATE project_integrations SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END WHERE projectId = ? AND key = ?").run(
       session.project.id,
       String(body.key)
     );
@@ -276,7 +276,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "create-label") {
-    db.prepare(
+    await db.prepare(
       "INSERT INTO label_definitions (id, projectId, groupName, type, valuesJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)"
     ).run(
       uid("lbl"),
@@ -290,7 +290,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "create-terms") {
-    db.prepare(
+    await db.prepare(
       "INSERT INTO terms_of_access (id, projectId, title, type, displayMode, assignedGroupIds, content, enabled, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"
     ).run(
       uid("trm"),
@@ -307,7 +307,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "update-terms" && body.id) {
-    db.prepare(
+    await db.prepare(
       `UPDATE terms_of_access SET
         title = COALESCE(?, title),
         type = COALESCE(?, type),
@@ -330,7 +330,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "toggle-terms" && body.id) {
-    db.prepare("UPDATE terms_of_access SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END, updatedAt = ? WHERE id = ? AND projectId = ?").run(
+    await db.prepare("UPDATE terms_of_access SET enabled = CASE WHEN enabled = 1 THEN 0 ELSE 1 END, updatedAt = ? WHERE id = ? AND projectId = ?").run(
       now,
       String(body.id),
       session.project.id
@@ -339,13 +339,13 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (body.scope === "delete-terms" && body.id) {
-    db.prepare("DELETE FROM terms_of_access WHERE id = ? AND projectId = ?").run(String(body.id), session.project.id);
+    await db.prepare("DELETE FROM terms_of_access WHERE id = ? AND projectId = ?").run(String(body.id), session.project.id);
     return NextResponse.json({ ok: true });
   }
 
   if (body.scope === "archive-order") {
     const id = uid("arc");
-    db.prepare("INSERT INTO archive_orders (id, projectId, type, status, configJson, createdAt) VALUES (?, ?, ?, 'Completed', ?, ?)").run(
+    await db.prepare("INSERT INTO archive_orders (id, projectId, type, status, configJson, createdAt) VALUES (?, ?, ?, 'Completed', ?, ?)").run(
       id,
       session.project.id,
       String(body.type || "Downloadable"),
@@ -353,9 +353,9 @@ export async function PATCH(req: NextRequest) {
       now
     );
     if (body.type === "Online") {
-      db.prepare("UPDATE projects SET status = 'Archived', updatedAt = ? WHERE id = ?").run(now, session.project.id);
+      await db.prepare("UPDATE projects SET status = 'Archived', updatedAt = ? WHERE id = ?").run(now, session.project.id);
     }
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -378,7 +378,7 @@ export async function PATCH(req: NextRequest) {
     const pid = uid("prj");
     const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now().toString(36)}`;
     const code = `5_${Math.floor(10000 + Math.random() * 89999)}`;
-    db.prepare(
+    await db.prepare(
       `INSERT INTO projects (id, name, slug, projectCode, status, projectType, storageLocation, driveRootFolderName, adminEmail, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, 'Live', ?, ?, ?, ?, ?, ?)`
     ).run(
@@ -394,13 +394,13 @@ export async function PATCH(req: NextRequest) {
       now
     );
     const gid = uid("grp");
-    db.prepare("INSERT INTO groups (id, projectId, name, role, isDefaultAdmin, createdAt, updatedAt) VALUES (?, ?, 'Administrators', 'Administrator', 1, ?, ?)").run(
+    await db.prepare("INSERT INTO groups (id, projectId, name, role, isDefaultAdmin, createdAt, updatedAt) VALUES (?, ?, 'Administrators', 'Administrator', 1, ?, ?)").run(
       gid,
       pid,
       now,
       now
     );
-    db.prepare("INSERT INTO project_participants (id, projectId, userId, groupId, status, addedBy, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'Engaged', ?, ?, ?)").run(
+    await db.prepare("INSERT INTO project_participants (id, projectId, userId, groupId, status, addedBy, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'Engaged', ?, ?, ?)").run(
       uid("prt"),
       pid,
       session.user.id,

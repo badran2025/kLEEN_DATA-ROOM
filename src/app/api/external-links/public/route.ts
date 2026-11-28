@@ -10,15 +10,15 @@ export async function GET(req: NextRequest) {
 
   if (!token) return NextResponse.json({ error: "Missing token" }, { status: 400 });
 
-  const db = getDb();
-  const link = db
+  const db = await getDb();
+  const link = (await db
     .prepare(
       `SELECT el.*, d.name as nodeName, d.dotIndex, d.driveFileId, d.mimeType, d.category, d.sizeBytes, d.pageCount, d.demoContentText
        FROM external_links el
        JOIN drive_nodes d ON d.id = el.nodeId
        WHERE el.token = ?`
     )
-    .get(token) as Record<string, unknown> | undefined;
+    .get(token)) as Record<string, unknown> | undefined;
 
   if (!link || link.enabled !== 1) {
     return NextResponse.json({ error: "This external link is inactive or no longer exists." }, { status: 404 });
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Passcode required", requirePasscode: true }, { status: 401 });
   }
 
-  const projectRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(String(link.projectId)) as Record<string, unknown> | undefined;
+  const projectRow = (await db.prepare("SELECT * FROM projects WHERE id = ?").get(String(link.projectId))) as Record<string, unknown> | undefined;
   if (!projectRow) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   const project = mapProject(plain(projectRow));
 
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  db.prepare("UPDATE external_links SET visitsCount = visitsCount + 1 WHERE id = ?").run(String(link.id));
+  await db.prepare("UPDATE external_links SET visitsCount = visitsCount + 1 WHERE id = ?").run(String(link.id));
 
   return NextResponse.json({
     projectName: project.name,

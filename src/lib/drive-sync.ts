@@ -82,11 +82,11 @@ function extractLeadingIndex(name: string): string | null {
   return token;
 }
 
-export function rebuildProjectIndices(projectId: string, preserveLeading = true) {
-  const db = getDb();
-  const nodes = db
+export async function rebuildProjectIndices(projectId: string, preserveLeading = true) {
+  const db = await getDb();
+  const nodes = (await db
     .prepare("SELECT id, driveFileId, parentDriveId, name, isFolder FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-    .all(projectId) as Array<{ id: string; driveFileId: string; parentDriveId: string | null; name: string; isFolder: number }>;
+    .all(projectId)) as Array<{ id: string; driveFileId: string; parentDriveId: string | null; name: string; isFolder: number }>;
 
   const validFolderIds = new Set(nodes.filter((n) => n.isFolder === 1).map((n) => n.driveFileId));
   const childrenByParent = new Map<string, typeof nodes>();
@@ -97,8 +97,8 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
     childrenByParent.set(parentKey, list);
   }
 
-  const updateStmt = db.prepare("UPDATE drive_nodes SET dotIndex = ?, sortOrder = ? WHERE id = ?");
   let count = 0;
+  const updates: Array<{ id: string; dotIndex: string; sortOrder: number }> = [];
 
   function assign(parentKey: string, prefix: string) {
     const list = childrenByParent.get(parentKey) ?? [];
@@ -128,7 +128,7 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
         seq++;
       }
       usedIndices.add(dotIndex);
-      updateStmt.run(dotIndex, idx + 1, node.id);
+      updates.push({ id: node.id, dotIndex, sortOrder: idx + 1 });
       count++;
       if (node.isFolder) {
         assign(node.driveFileId, dotIndex);
@@ -136,14 +136,14 @@ export function rebuildProjectIndices(projectId: string, preserveLeading = true)
     });
   }
 
-  db.exec("BEGIN");
-  try {
-    assign("__ROOT__", "");
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
+  assign("__ROOT__", "");
+
+  await db.transaction(async (tx) => {
+    const updateStmt = tx.prepare("UPDATE drive_nodes SET dotIndex = ?, sortOrder = ? WHERE id = ?");
+    for (const u of updates) {
+      await updateStmt.run(u.dotIndex, u.sortOrder, u.id);
+    }
+  });
 
   return count;
 }
@@ -168,14 +168,14 @@ export function ensureAutoSyncDaemon() {
 
 export async function runDueAutoSyncs() {
   try {
-    const db = getDb();
-    const rows = db
+    const db = await getDb();
+    const rows = (await db
       .prepare(
         `SELECT id, driveAuthMode, driveRootFolderId, lastSyncedAt, autoSyncIntervalMin
          FROM projects
          WHERE driveAuthMode != 'demo' AND driveRootFolderId IS NOT NULL AND driveRootFolderId != ''`
       )
-      .all() as Array<{
+      .all()) as Array<{
       id: string;
       driveAuthMode: string;
       driveRootFolderId: string;
@@ -215,21 +215,21 @@ async function runSyncProjectWithGoogleDrive(
   projectId: string,
   actor?: { id?: string; name: string; email: string }
 ) {
-  const db = getDb();
-  const projectRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as Record<string, unknown> | undefined;
+  const db = await getDb();
+  const projectRow = (await db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId)) as Record<string, unknown> | undefined;
   if (!projectRow) throw new Error("Project not found");
   const project = mapProject(plain(projectRow));
 
   const now = nowIso();
 
   if (project.driveAuthMode === "demo" || !project.driveRootFolderId) {
-    const reindexed = rebuildProjectIndices(project.id, project.autoIndexing);
-    db.prepare("UPDATE projects SET lastSyncedAt = ?, lastSyncStatus = 'synced', lastSyncError = NULL, updatedAt = ? WHERE id = ?").run(
+    const reindexed = await rebuildProjectIndices(project.id, project.autoIndexing);
+    await db.prepare("UPDATE projects SET lastSyncedAt = ?, lastSyncStatus = 'synced', lastSyncError = NULL, updatedAt = ? WHERE id = ?").run(
       now,
       now,
       project.id
     );
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -243,11 +243,11 @@ async function runSyncProjectWithGoogleDrive(
       `Mode: Demo Mirror | Re-indexed ${reindexed} mirrored items`,
       now
     );
-    const updatedRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as Record<string, unknown>;
+    const updatedRow = (await db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id)) as Record<string, unknown>;
     return { mode: "demo", syncedCount: reindexed, trashedCount: 0, project: mapProject(plain(updatedRow)) };
   }
 
-  db.prepare("UPDATE projects SET lastSyncStatus = 'syncing', lastSyncError = NULL, updatedAt = ? WHERE id = ?").run(now, project.id);
+  await db.prepare("UPDATE projects SET lastSyncStatus = 'syncing', lastSyncError = NULL, updatedAt = ? WHERE id = ?").run(now, project.id);
 
   try {
     const drive = await createDriveClient(project);
@@ -373,35 +373,34 @@ async function runSyncProjectWithGoogleDrive(
     });
 
     const discoveredIds = new Set(discovered.map((d) => d.driveFileId));
-    const existingRows = db
+    const existingRows = (await db
       .prepare("SELECT id, driveFileId, isTrashed FROM drive_nodes WHERE projectId = ?")
-      .all(project.id) as Array<{ id: string; driveFileId: string; isTrashed: number }>;
+      .all(project.id)) as Array<{ id: string; driveFileId: string; isTrashed: number }>;
     const existingByDriveId = new Map(existingRows.map((r) => [r.driveFileId, r]));
 
-    const insertNode = db.prepare(`
-      INSERT INTO drive_nodes (
-        id, projectId, driveFileId, parentDriveId, name, isFolder, mimeType, extension, category,
-        sizeBytes, pageCount, dotIndex, sortOrder, driveWebViewLink, driveModifiedAt, driveCreatedAt,
-        isPublished, isTrashed, trashedAt, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', 0, ?, ?, ?, ?, 0, NULL, ?, ?)
-    `);
-    const updateNode = db.prepare(`
-      UPDATE drive_nodes SET
-        parentDriveId = ?, name = ?, isFolder = ?, mimeType = ?, extension = ?, category = ?,
-        sizeBytes = CASE WHEN ? > 0 THEN ? ELSE sizeBytes END,
-        driveWebViewLink = ?, driveModifiedAt = ?, isTrashed = 0, trashedAt = NULL, updatedAt = ?
-      WHERE id = ?
-    `);
+    let trashedCount = 0;
+    await db.transaction(async (tx) => {
+      const insertNode = tx.prepare(`
+        INSERT INTO drive_nodes (
+          id, projectId, driveFileId, parentDriveId, name, isFolder, mimeType, extension, category,
+          sizeBytes, pageCount, dotIndex, sortOrder, driveWebViewLink, driveModifiedAt, driveCreatedAt,
+          isPublished, isTrashed, trashedAt, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1', 0, ?, ?, ?, ?, 0, NULL, ?, ?)
+      `);
+      const updateNode = tx.prepare(`
+        UPDATE drive_nodes SET
+          parentDriveId = ?, name = ?, isFolder = ?, mimeType = ?, extension = ?, category = ?,
+          sizeBytes = CASE WHEN ? > 0 THEN ? ELSE sizeBytes END,
+          driveWebViewLink = ?, driveModifiedAt = ?, isTrashed = 0, trashedAt = NULL, updatedAt = ?
+        WHERE id = ?
+      `);
 
-    db.exec("BEGIN");
-    try {
-      // Remove any leftover demo rows cleanly when mirroring a real Drive root
-      db.prepare("DELETE FROM drive_nodes WHERE projectId = ? AND driveFileId LIKE 'demo-%'").run(project.id);
+      await tx.prepare("DELETE FROM drive_nodes WHERE projectId = ? AND driveFileId LIKE 'demo-%'").run(project.id);
 
       for (const item of discovered) {
         const prev = existingByDriveId.get(item.driveFileId);
         if (prev) {
-          updateNode.run(
+          await updateNode.run(
             item.parentDriveId,
             item.name,
             item.isFolder ? 1 : 0,
@@ -416,7 +415,7 @@ async function runSyncProjectWithGoogleDrive(
             prev.id
           );
         } else {
-          insertNode.run(
+          await insertNode.run(
             uid("nod"),
             project.id,
             item.driveFileId,
@@ -438,52 +437,47 @@ async function runSyncProjectWithGoogleDrive(
         }
       }
 
-      let trashedCount = 0;
-      const trashStmt = db.prepare("UPDATE drive_nodes SET isTrashed = 1, trashedAt = ?, updatedAt = ? WHERE id = ?");
+      const trashStmt = tx.prepare("UPDATE drive_nodes SET isTrashed = 1, trashedAt = ?, updatedAt = ? WHERE id = ?");
       for (const row of existingRows) {
         if (row.driveFileId.startsWith("demo-")) continue;
         if (!row.isTrashed && !discoveredIds.has(row.driveFileId)) {
-          trashStmt.run(now, now, row.id);
+          await trashStmt.run(now, now, row.id);
           trashedCount++;
         }
       }
-      db.exec("COMMIT");
+    });
 
-      rebuildProjectIndices(project.id, project.autoIndexing);
+    await rebuildProjectIndices(project.id, project.autoIndexing);
 
-      db.prepare(
-        "UPDATE projects SET driveRootFolderId = ?, driveRootFolderName = ?, lastSyncedAt = ?, lastSyncStatus = 'synced', lastSyncError = NULL, updatedAt = ? WHERE id = ?"
-      ).run(rootFolderId, rootName, now, now, project.id);
+    await db.prepare(
+      "UPDATE projects SET driveRootFolderId = ?, driveRootFolderName = ?, lastSyncedAt = ?, lastSyncStatus = 'synced', lastSyncError = NULL, updatedAt = ? WHERE id = ?"
+    ).run(rootFolderId, rootName, now, now, project.id);
 
-      db.prepare(
-        "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run(
-        uid("log"),
-        project.id,
-        actor?.id ?? null,
-        actor?.name || "System Sync",
-        actor?.email || project.adminEmail,
-        "Administrators",
-        "Drive sync",
-        "Google Drive synced",
-        `Folder: ${rootName} | Synced: ${discovered.length} items | Removed: ${trashedCount}`,
-        now
-      );
+    await db.prepare(
+      "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(
+      uid("log"),
+      project.id,
+      actor?.id ?? null,
+      actor?.name || "System Sync",
+      actor?.email || project.adminEmail,
+      "Administrators",
+      "Drive sync",
+      "Google Drive synced",
+      `Folder: ${rootName} | Synced: ${discovered.length} items | Removed: ${trashedCount}`,
+      now
+    );
 
-      const updatedRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as Record<string, unknown>;
-      return {
-        mode: project.driveAuthMode,
-        syncedCount: discovered.length,
-        trashedCount,
-        project: mapProject(plain(updatedRow)),
-      };
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
+    const updatedRow = (await db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id)) as Record<string, unknown>;
+    return {
+      mode: project.driveAuthMode,
+      syncedCount: discovered.length,
+      trashedCount,
+      project: mapProject(plain(updatedRow)),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown Google Drive sync error";
-    db.prepare("UPDATE projects SET lastSyncStatus = 'error', lastSyncError = ?, updatedAt = ? WHERE id = ?").run(
+    await db.prepare("UPDATE projects SET lastSyncStatus = 'error', lastSyncError = ?, updatedAt = ? WHERE id = ?").run(
       message,
       now,
       project.id

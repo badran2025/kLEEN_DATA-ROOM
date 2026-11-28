@@ -10,71 +10,71 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   ensureAutoSyncDaemon();
-  const db = getDb();
+  const db = await getDb();
 
   if (session.project.driveAuthMode !== "demo" && session.project.driveRootFolderId) {
-    const realCount = db
+    const realCount = (await db
       .prepare(
         "SELECT COUNT(*) as c FROM drive_nodes WHERE projectId = ? AND isTrashed = 0 AND driveFileId NOT LIKE 'demo-%'"
       )
-      .get(session.project.id) as { c: number };
+      .get(session.project.id)) as { c: number };
     const lastMs = session.project.lastSyncedAt ? new Date(session.project.lastSyncedAt).getTime() : 0;
     const staleMs = Date.now() - lastMs;
 
-    if (realCount.c === 0 || session.project.lastSyncStatus === "error") {
+    if (Number(realCount?.c || 0) === 0 || session.project.lastSyncStatus === "error") {
       await syncProjectWithGoogleDrive(session.project.id).catch(() => null);
     } else if (staleMs > 60_000 && !isProjectSyncing(session.project.id)) {
       void syncProjectWithGoogleDrive(session.project.id).catch(() => null);
     }
   }
 
-  const rawNodes = db
+  const rawNodes = (await db
     .prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
   const availableLabels = (
-    db
+    (await db
       .prepare("SELECT id, groupName, valuesJson FROM label_definitions WHERE projectId = ? ORDER BY createdAt ASC")
-      .all(session.project.id) as Array<Record<string, unknown>>
+      .all(session.project.id)) as Array<Record<string, unknown>>
   ).map((l) => ({
     id: String(l.id),
     groupName: String(l.groupName),
     values: JSON.parse(String(l.valuesJson || "[]")) as string[],
   }));
 
-  const trashedNodes = db
+  const trashedNodes = (await db
     .prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 1 ORDER BY trashedAt DESC")
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
-  const permRows = db
+  const permRows = (await db
     .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-    .all(session.project.id, session.effectiveGroup.id) as Array<{ nodeId: string; level: string }>;
+    .all(session.project.id, session.effectiveGroup.id)) as Array<{ nodeId: string; level: string }>;
   const permMap = new Map(permRows.map((p) => [p.nodeId, p.level]));
 
-  const noteRows = db
+  const noteRows = (await db
     .prepare("SELECT nodeId, noteType, authorId FROM document_notes WHERE projectId = ?")
-    .all(session.project.id) as Array<{ nodeId: string; noteType: string; authorId: string }>;
+    .all(session.project.id)) as Array<{ nodeId: string; noteType: string; authorId: string }>;
 
-  const favRows = db
+  const favRows = (await db
     .prepare("SELECT nodeId FROM document_favorites WHERE projectId = ? AND userId = ?")
-    .all(session.project.id, session.user.id) as Array<{ nodeId: string }>;
+    .all(session.project.id, session.user.id)) as Array<{ nodeId: string }>;
   const favSet = new Set(favRows.map((f) => f.nodeId));
 
-  const viewLogs = db
+  const viewLogs = (await db
     .prepare(
       "SELECT nodeId, MAX(createdAt) as lastViewedAt FROM activity_logs WHERE projectId = ? AND userId = ? AND nodeId IS NOT NULL GROUP BY nodeId"
     )
-    .all(session.project.id, session.user.id) as Array<{ nodeId: string; lastViewedAt: string }>;
+    .all(session.project.id, session.user.id)) as Array<{ nodeId: string; lastViewedAt: string }>;
   const viewMap = new Map(viewLogs.map((v) => [v.nodeId, v.lastViewedAt]));
 
-  const labelRows = db
+  const labelRows = (await db
     .prepare(
       `SELECT dl.nodeId, ld.id as labelId, ld.groupName, dl.value
        FROM document_labels dl
        JOIN label_definitions ld ON ld.id = dl.labelId
        WHERE ld.projectId = ?`
     )
-    .all(session.project.id) as Array<{ nodeId: string; labelId: string; groupName: string; value: string }>;
+    .all(session.project.id)) as Array<{ nodeId: string; labelId: string; groupName: string; value: string }>;
 
   const labelsByNode = new Map<string, Array<{ id: string; groupName: string; value: string }>>();
   for (const lr of labelRows) {
@@ -157,9 +157,9 @@ export async function GET() {
 
   visibleNodes.sort((a, b) => compareDotIndex(String(a.dotIndex), String(b.dotIndex)));
 
-  const latestProj = db
+  const latestProj = (await db
     .prepare("SELECT lastSyncedAt, lastSyncStatus, lastSyncError FROM projects WHERE id = ?")
-    .get(session.project.id) as { lastSyncedAt: string | null; lastSyncStatus: string; lastSyncError: string | null } | undefined;
+    .get(session.project.id)) as { lastSyncedAt: string | null; lastSyncStatus: string; lastSyncError: string | null } | undefined;
 
   return NextResponse.json({
     nodes: visibleNodes,
@@ -181,28 +181,27 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
 
   if (body.action === "set-label" && body.nodeId && body.labelId && body.value) {
     if (!session.isAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
-    const existing = db
+    const existing = (await db
       .prepare("SELECT id, value FROM document_labels WHERE nodeId = ? AND labelId = ?")
-      .get(String(body.nodeId), String(body.labelId)) as { id: string; value: string } | undefined;
+      .get(String(body.nodeId), String(body.labelId))) as { id: string; value: string } | undefined;
 
     if (existing && existing.value === String(body.value)) {
-      db.prepare("DELETE FROM document_labels WHERE id = ?").run(existing.id);
+      await db.prepare("DELETE FROM document_labels WHERE id = ?").run(existing.id);
       return NextResponse.json({ ok: true, removed: true });
     }
     if (existing) {
-      db.prepare("UPDATE document_labels SET value = ? WHERE id = ?").run(String(body.value), existing.id);
+      await db.prepare("UPDATE document_labels SET value = ? WHERE id = ?").run(String(body.value), existing.id);
     } else {
-      db.prepare("INSERT INTO document_labels (id, nodeId, labelId, value, createdAt) VALUES (?, ?, ?, ?, ?)").run(
+      await db.prepare("INSERT INTO document_labels (id, nodeId, labelId, value) VALUES (?, ?, ?, ?)").run(
         uid("dlb"),
         String(body.nodeId),
         String(body.labelId),
-        String(body.value),
-        now
+        String(body.value)
       );
     }
     return NextResponse.json({ ok: true });
@@ -210,12 +209,12 @@ export async function POST(req: NextRequest) {
 
   if (body.action === "toggle-publish" && body.nodeId) {
     if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
-    const row = db
+    const row = (await db
       .prepare("SELECT id, isPublished, name FROM drive_nodes WHERE id = ? AND projectId = ?")
-      .get(String(body.nodeId), session.project.id) as { id: string; isPublished: number; name: string } | undefined;
+      .get(String(body.nodeId), session.project.id)) as { id: string; isPublished: number; name: string } | undefined;
     if (!row) return NextResponse.json({ error: "Node not found" }, { status: 404 });
     const nextPub = row.isPublished === 1 ? 0 : 1;
-    db.prepare("UPDATE drive_nodes SET isPublished = ?, updatedAt = ? WHERE id = ?").run(nextPub, now, row.id);
+    await db.prepare("UPDATE drive_nodes SET isPublished = ?, updatedAt = ? WHERE id = ?").run(nextPub, now, row.id);
     return NextResponse.json({ ok: true, isPublished: nextPub === 1 });
   }
 

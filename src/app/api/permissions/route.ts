@@ -10,22 +10,22 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
 
-  const db = getDb();
+  const db = await getDb();
   const format = req.nextUrl.searchParams.get("format");
 
   const groups = (
-    db.prepare("SELECT * FROM groups WHERE projectId = ? AND isDeleted = 0 ORDER BY isDefaultAdmin DESC, name ASC").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM groups WHERE projectId = ? AND isDeleted = 0 ORDER BY isDefaultAdmin DESC, name ASC").all(session.project.id)) as Array<Record<string, unknown>>
   ).map((g) => mapGroup(plain(g)));
 
   const nodes = (
-    db.prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0").all(session.project.id) as Array<Record<string, unknown>>
+    (await db.prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0").all(session.project.id)) as Array<Record<string, unknown>>
   )
     .map((n): Record<string, unknown> => ({ ...plain(n), isFolder: n.isFolder === 1 }))
     .sort((a, b) => compareDotIndex(String(a.dotIndex), String(b.dotIndex)));
 
-  const permRows = db
+  const permRows = (await db
     .prepare("SELECT groupId, nodeId, level FROM document_permissions WHERE projectId = ?")
-    .all(session.project.id) as Array<{ groupId: string; nodeId: string; level: string }>;
+    .all(session.project.id)) as Array<{ groupId: string; nodeId: string; level: string }>;
 
   if (format === "xlsx") {
     const nodeLookup = new Map(nodes.map((n) => [String(n.id), { id: String(n.id), driveFileId: String(n.driveFileId), parentDriveId: n.parentDriveId ? String(n.parentDriveId) : null }]));
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
   if (!session.isTrueAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 });
 
   const body = await req.json();
-  const db = getDb();
+  const db = await getDb();
   const now = nowIso();
   const actor = `${session.user.firstName} ${session.user.lastName}`.trim();
 
@@ -77,29 +77,29 @@ export async function POST(req: NextRequest) {
     const level = String(body.level || "view");
     if (!groupId || !nodeId) return NextResponse.json({ error: "groupId and nodeId required" }, { status: 400 });
 
-    const existing = db
+    const existing = (await db
       .prepare("SELECT id FROM document_permissions WHERE projectId = ? AND groupId = ? AND nodeId = ?")
-      .get(session.project.id, groupId, nodeId) as { id: string } | undefined;
+      .get(session.project.id, groupId, nodeId)) as { id: string } | undefined;
 
     if (existing) {
-      db.prepare("UPDATE document_permissions SET level = ?, updatedBy = ?, updatedAt = ? WHERE id = ?").run(
+      await db.prepare("UPDATE document_permissions SET level = ?, updatedBy = ?, updatedAt = ? WHERE id = ?").run(
         level,
         actor,
         now,
         existing.id
       );
     } else {
-      db.prepare(
+      await db.prepare(
         "INSERT INTO document_permissions (id, projectId, groupId, nodeId, level, updatedBy, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
       ).run(uid("prm"), session.project.id, groupId, nodeId, level, actor, now);
     }
 
-    const grp = db.prepare("SELECT name FROM groups WHERE id = ?").get(groupId) as { name: string } | undefined;
-    const nod = db.prepare("SELECT dotIndex, name FROM drive_nodes WHERE id = ?").get(nodeId) as
+    const grp = (await db.prepare("SELECT name FROM groups WHERE id = ?").get(groupId)) as { name: string } | undefined;
+    const nod = (await db.prepare("SELECT dotIndex, name FROM drive_nodes WHERE id = ?").get(nodeId)) as
       | { dotIndex: string; name: string }
       | undefined;
 
-    db.prepare(
+    await db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, groupId, nodeId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(
       uid("log"),
@@ -124,24 +124,19 @@ export async function POST(req: NextRequest) {
     const targetGroupId = String(body.targetGroupId || "");
     if (!sourceGroupId || !targetGroupId) return NextResponse.json({ error: "Source and target groups required" }, { status: 400 });
 
-    const sourcePerms = db
+    const sourcePerms = (await db
       .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-      .all(session.project.id, sourceGroupId) as Array<{ nodeId: string; level: string }>;
+      .all(session.project.id, sourceGroupId)) as Array<{ nodeId: string; level: string }>;
 
-    db.exec("BEGIN");
-    try {
-      db.prepare("DELETE FROM document_permissions WHERE projectId = ? AND groupId = ?").run(session.project.id, targetGroupId);
-      const ins = db.prepare(
+    await db.transaction(async (tx) => {
+      await tx.prepare("DELETE FROM document_permissions WHERE projectId = ? AND groupId = ?").run(session.project.id, targetGroupId);
+      const ins = tx.prepare(
         "INSERT INTO document_permissions (id, projectId, groupId, nodeId, level, updatedBy, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
       );
       for (const p of sourcePerms) {
-        ins.run(uid("prm"), session.project.id, targetGroupId, p.nodeId, p.level, actor, now);
+        await ins.run(uid("prm"), session.project.id, targetGroupId, p.nodeId, p.level, actor, now);
       }
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
+    });
 
     return NextResponse.json({ ok: true, copied: sourcePerms.length });
   }
@@ -157,9 +152,9 @@ export async function POST(req: NextRequest) {
     }
 
     const allKnownExts = new Set(Object.values(FILE_TYPE_CATEGORIES).flat());
-    const nodes = db
+    const nodes = (await db
       .prepare("SELECT id, driveFileId, parentDriveId, extension FROM drive_nodes WHERE projectId = ? AND isFolder = 0 AND isTrashed = 0")
-      .all(session.project.id) as Array<{ id: string; driveFileId: string; parentDriveId: string | null; extension: string }>;
+      .all(session.project.id)) as Array<{ id: string; driveFileId: string; parentDriveId: string | null; extension: string }>;
 
     const matchingNodes = nodes.filter((n) => {
       const extUpper = n.extension.toUpperCase();
@@ -168,17 +163,17 @@ export async function POST(req: NextRequest) {
       return false;
     });
 
-    const allNodes = db
+    const allNodes = (await db
       .prepare("SELECT id, driveFileId, parentDriveId FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-      .all(session.project.id) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
+      .all(session.project.id)) as Array<{ id: string; driveFileId: string; parentDriveId: string | null }>;
     const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
     const driveMap = new Map(allNodes.map((n) => [n.driveFileId, n.id]));
 
     let updatedCount = 0;
     for (const gid of groupIds) {
-      const permRows = db
+      const permRows = (await db
         .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-        .all(session.project.id, gid) as Array<{ nodeId: string; level: string }>;
+        .all(session.project.id, gid)) as Array<{ nodeId: string; level: string }>;
       const permMap = new Map(permRows.map((p) => [p.nodeId, p.level]));
 
       for (const mn of matchingNodes) {
@@ -186,18 +181,18 @@ export async function POST(req: NextRequest) {
           const eff = resolveEffectivePermission(mn.id, "User", nodeMap, driveMap, permMap);
           if (eff === "none") continue;
         }
-        const existing = db
+        const existing = (await db
           .prepare("SELECT id FROM document_permissions WHERE projectId = ? AND groupId = ? AND nodeId = ?")
-          .get(session.project.id, gid, mn.id) as { id: string } | undefined;
+          .get(session.project.id, gid, mn.id)) as { id: string } | undefined;
         if (existing) {
-          db.prepare("UPDATE document_permissions SET level = ?, updatedBy = ?, updatedAt = ? WHERE id = ?").run(
+          await db.prepare("UPDATE document_permissions SET level = ?, updatedBy = ?, updatedAt = ? WHERE id = ?").run(
             level,
             actor,
             now,
             existing.id
           );
         } else {
-          db.prepare(
+          await db.prepare(
             "INSERT INTO document_permissions (id, projectId, groupId, nodeId, level, updatedBy, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)"
           ).run(uid("prm"), session.project.id, gid, mn.id, level, actor, now);
         }

@@ -15,14 +15,14 @@ export async function POST(req: NextRequest) {
   const parentDriveId: string | null = body.parentDriveId ?? null;
   const format = String(body.format || "pdf");
 
-  const db = getDb();
-  const rawNodes = db
+  const db = await getDb();
+  const rawNodes = (await db
     .prepare("SELECT * FROM drive_nodes WHERE projectId = ? AND isTrashed = 0")
-    .all(session.project.id) as Array<Record<string, unknown>>;
+    .all(session.project.id)) as Array<Record<string, unknown>>;
 
-  const permRows = db
+  const permRows = (await db
     .prepare("SELECT nodeId, level FROM document_permissions WHERE projectId = ? AND groupId = ?")
-    .all(session.project.id, session.effectiveGroup.id) as Array<{ nodeId: string; level: string }>;
+    .all(session.project.id, session.effectiveGroup.id)) as Array<{ nodeId: string; level: string }>;
 
   const nodeLookup = new Map(
     rawNodes.map((n) => [String(n.id), { id: String(n.id), driveFileId: String(n.driveFileId), parentDriveId: n.parentDriveId ? String(n.parentDriveId) : null }])
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
 
   const zipBuffer = await zip.generateAsync({ type: "uint8array" });
 
-  db.prepare(
+  await db.prepare(
     "INSERT INTO activity_logs (id, projectId, userId, groupId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(
     uid("log"),

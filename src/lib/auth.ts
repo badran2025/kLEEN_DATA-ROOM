@@ -114,27 +114,27 @@ export async function getCurrentSession() {
   const payload = await verifySessionToken(token);
   if (!payload) return null;
 
-  const db = getDb();
-  const userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(payload.userId) as Record<string, unknown> | undefined;
+  const db = await getDb();
+  const userRow = (await db.prepare("SELECT * FROM users WHERE id = ?").get(payload.userId)) as Record<string, unknown> | undefined;
   if (!userRow) return null;
 
   const projectRow =
-    (db.prepare("SELECT * FROM projects WHERE id = ?").get(payload.projectId) as Record<string, unknown> | undefined) ??
-    (db.prepare("SELECT * FROM projects ORDER BY createdAt ASC LIMIT 1").get() as Record<string, unknown> | undefined);
+    ((await db.prepare("SELECT * FROM projects WHERE id = ?").get(payload.projectId)) as Record<string, unknown> | undefined) ??
+    ((await db.prepare("SELECT * FROM projects ORDER BY createdAt ASC LIMIT 1").get()) as Record<string, unknown> | undefined);
   if (!projectRow) return null;
 
-  const partRow = db
+  const partRow = (await db
     .prepare("SELECT * FROM project_participants WHERE projectId = ? AND userId = ?")
-    .get(String(projectRow.id), String(userRow.id)) as Record<string, unknown> | undefined;
+    .get(String(projectRow.id), String(userRow.id))) as Record<string, unknown> | undefined;
   if (!partRow || !toBool(partRow.accessEnabled)) return null;
 
   const nowMs = Date.now();
   if (partRow.accessStart && new Date(String(partRow.accessStart)).getTime() > nowMs) return null;
   if (partRow.accessEnd && new Date(String(partRow.accessEnd)).getTime() < nowMs) return null;
 
-  const actualGroupRow = db
+  const actualGroupRow = (await db
     .prepare("SELECT * FROM groups WHERE id = ?")
-    .get(String(partRow.groupId)) as Record<string, unknown> | undefined;
+    .get(String(partRow.groupId))) as Record<string, unknown> | undefined;
   if (!actualGroupRow || toBool(actualGroupRow.isDeleted)) return null;
 
   const actualGroup = mapGroup(plain(actualGroupRow));
@@ -142,9 +142,9 @@ export async function getCurrentSession() {
   let isViewingAs = false;
 
   if (payload.viewAsGroupId && actualGroup.role === "Administrator") {
-    const previewRow = db
+    const previewRow = (await db
       .prepare("SELECT * FROM groups WHERE id = ? AND projectId = ? AND isDeleted = 0")
-      .get(payload.viewAsGroupId, String(projectRow.id)) as Record<string, unknown> | undefined;
+      .get(payload.viewAsGroupId, String(projectRow.id))) as Record<string, unknown> | undefined;
     if (previewRow) {
       effectiveGroup = mapGroup(plain(previewRow));
       isViewingAs = true;
