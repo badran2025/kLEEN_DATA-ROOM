@@ -23,7 +23,10 @@ export async function GET() {
   const pendingTerms = [];
   for (const t of activeTerms) {
     const assignedIds: string[] = JSON.parse(t.assignedGroupIds || "[]");
-    const applies = assignedIds.length === 0 || assignedIds.includes(session.effectiveGroup.id);
+    const applies =
+      assignedIds.length === 0
+        ? session.effectiveGroup.role !== "Administrator"
+        : assignedIds.includes(session.effectiveGroup.id);
     if (!applies) continue;
 
     if (t.displayMode === "On each sign-in") {

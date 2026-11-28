@@ -190,6 +190,27 @@ export async function POST(req: NextRequest) {
       invites.push({ email, fullName: `${firstName} ${lastName}`.trim(), inviteToken });
     }
 
+    if (Array.isArray(body.assignedTermsIds) && body.assignedTermsIds.length > 0) {
+      for (const tid of body.assignedTermsIds as string[]) {
+        const termRow = db
+          .prepare("SELECT id, assignedGroupIds FROM terms_of_access WHERE id = ? AND projectId = ?")
+          .get(String(tid), session.project.id) as { id: string; assignedGroupIds: string } | undefined;
+        if (termRow) {
+          const currentGroups: string[] = JSON.parse(termRow.assignedGroupIds || "[]");
+          if (currentGroups.length > 0 && !currentGroups.includes(groupId)) {
+            currentGroups.push(groupId);
+            db.prepare("UPDATE terms_of_access SET assignedGroupIds = ?, enabled = 1, updatedAt = ? WHERE id = ?").run(
+              JSON.stringify(currentGroups),
+              now,
+              termRow.id
+            );
+          } else {
+            db.prepare("UPDATE terms_of_access SET enabled = 1, updatedAt = ? WHERE id = ?").run(now, termRow.id);
+          }
+        }
+      }
+    }
+
     db.prepare(
       "INSERT INTO activity_logs (id, projectId, userId, actorName, actorEmail, groupName, category, action, description, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(

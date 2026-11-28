@@ -24,11 +24,24 @@ export async function GET() {
     db.prepare("SELECT * FROM terms_of_access WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
   ).map((t) => ({ ...plain(t), enabled: t.enabled === 1 }));
 
+  const acceptances = (
+    db
+      .prepare(
+        `SELECT ta.id, ta.termsId, ta.acceptedAt, u.email, u.firstName, u.lastName, t.title as termsTitle
+         FROM terms_acceptances ta
+         JOIN users u ON u.id = ta.userId
+         JOIN terms_of_access t ON t.id = ta.termsId
+         WHERE t.projectId = ?
+         ORDER BY ta.acceptedAt DESC`
+      )
+      .all(session.project.id) as Array<Record<string, unknown>>
+  ).map((a) => plain(a));
+
   const archives = (
     db.prepare("SELECT * FROM archive_orders WHERE projectId = ? ORDER BY createdAt DESC").all(session.project.id) as Array<Record<string, unknown>>
   ).map((a) => plain(a));
 
-  return NextResponse.json({ statusHistory, integrations, labels, terms, archives });
+  return NextResponse.json({ statusHistory, integrations, labels, terms, acceptances, archives });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -216,6 +229,29 @@ export async function PATCH(req: NextRequest) {
       String(body.content || ""),
       now,
       now
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.scope === "update-terms" && body.id) {
+    db.prepare(
+      `UPDATE terms_of_access SET
+        title = COALESCE(?, title),
+        type = COALESCE(?, type),
+        displayMode = COALESCE(?, displayMode),
+        assignedGroupIds = COALESCE(?, assignedGroupIds),
+        content = COALESCE(?, content),
+        updatedAt = ?
+      WHERE id = ? AND projectId = ?`
+    ).run(
+      body.title ?? null,
+      body.type ?? null,
+      body.displayMode ?? null,
+      Array.isArray(body.assignedGroupIds) ? JSON.stringify(body.assignedGroupIds) : null,
+      body.content ?? null,
+      now,
+      String(body.id),
+      session.project.id
     );
     return NextResponse.json({ ok: true });
   }

@@ -95,6 +95,8 @@ export function ParticipantsView({
   const [invAllowedIps, setInvAllowedIps] = useState("");
   const [generatedInvites, setGeneratedInvites] = useState<Array<{ email: string; fullName: string; inviteToken: string }>>([]);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [availableTerms, setAvailableTerms] = useState<Array<{ id: string; title: string; assignedGroupIds: string; enabled: boolean }>>([]);
+  const [selectedTermsIds, setSelectedTermsIds] = useState<string[]>([]);
 
   // Create Group wizard state
   const [newGroupName, setNewGroupName] = useState("");
@@ -107,7 +109,7 @@ export function ParticipantsView({
   }
 
   async function loadParticipants() {
-    const res = await fetch("/api/participants");
+    const [res, sRes] = await Promise.all([fetch("/api/participants"), fetch("/api/settings")]);
     if (res.ok) {
       const data = await res.json();
       setGroups(data.groups || []);
@@ -115,6 +117,10 @@ export function ParticipantsView({
         const ug = data.groups.find((g: FullGroup) => g.role !== "Administrator") || data.groups[0];
         setInvGroupId(ug.id);
       }
+    }
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      setAvailableTerms(sData.terms || []);
     }
   }
 
@@ -149,6 +155,7 @@ export function ParticipantsView({
     setInvRequire2fa(false);
     setInvAllowedIpEnabled(false);
     setInvAllowedIps("");
+    setSelectedTermsIds([]);
   }
 
   async function submitInvite(e: React.FormEvent) {
@@ -171,6 +178,7 @@ export function ParticipantsView({
         accessEnd: invEndCustom && invEndDate ? new Date(invEndDate).toISOString() : null,
         require2fa: invRequire2fa,
         allowedIps: invAllowedIpEnabled ? invAllowedIps : "",
+        assignedTermsIds: selectedTermsIds,
       }),
     });
     const data = await res.json();
@@ -954,6 +962,38 @@ export function ParticipantsView({
                     />
                   )}
                 </div>
+
+                {availableTerms.length > 0 && (
+                  <div className="space-y-1.5 border-t border-[var(--apple-border)] pt-3">
+                    <div className="font-semibold">Terms of access (NDA) required on sign-in</div>
+                    <div className="space-y-1">
+                      {availableTerms.map((t) => {
+                        const gIds: string[] = JSON.parse(t.assignedGroupIds || "[]");
+                        const alreadyApplies = t.enabled && (gIds.length === 0 || gIds.includes(invGroupId));
+                        return (
+                          <label key={t.id} className="flex items-center justify-between rounded-lg bg-[var(--apple-bg)]/60 px-2.5 py-1.5">
+                            <span>
+                              {t.title}{" "}
+                              {alreadyApplies && (
+                                <span className="ml-1 text-[10px] font-semibold text-emerald-500">(Active for this group)</span>
+                              )}
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={alreadyApplies || selectedTermsIds.includes(t.id)}
+                              disabled={alreadyApplies}
+                              onChange={(e) =>
+                                setSelectedTermsIds((prev) =>
+                                  e.target.checked ? [...prev, t.id] : prev.filter((id) => id !== t.id)
+                                )
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-between pt-2">
                   <button

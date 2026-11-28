@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Shield,
   Sparkles,
+  Download,
 } from "lucide-react";
 import type { GroupDto, ProjectDto, UserDto } from "@/lib/types";
 import { formatDateShort, formatDateTime } from "@/lib/format";
@@ -65,6 +66,15 @@ export function SettingsView({
       enabled: boolean;
       createdAt: string;
     }>;
+    acceptances?: Array<{
+      id: string;
+      termsId: string;
+      acceptedAt: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      termsTitle: string;
+    }>;
   } | null>(null);
 
   const [editingName, setEditingName] = useState(false);
@@ -87,12 +97,21 @@ export function SettingsView({
   const [lblValues, setLblValues] = useState("");
 
   const [showTermsModal, setShowTermsModal] = useState(false);
+  const [editingTermId, setEditingTermId] = useState<string | null>(null);
   const [termTitle, setTermTitle] = useState("NDA_Kleen_New");
   const [termType, setTermType] = useState("NDA");
   const [termDisplay, setTermDisplay] = useState("On first sign-in");
   const [termGroupIds, setTermGroupIds] = useState<string[]>([]);
   const [termContent, setTermContent] = useState("");
-  const [previewTerm, setPreviewTerm] = useState<{ title: string; content: string } | null>(null);
+  const [previewTerm, setPreviewTerm] = useState<{
+    id: string;
+    title: string;
+    type: string;
+    displayMode: string;
+    assignedGroupIds: string;
+    content: string;
+  } | null>(null);
+  const [previewAccepted, setPreviewAccepted] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
 
@@ -608,15 +627,52 @@ export function SettingsView({
       {/* 7. Terms of Access */}
       {subTab === "terms-of-access" && (
         <div className="space-y-4 text-xs">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold">Terms of access (NDA & Disclaimers)</h3>
-            <button
-              type="button"
-              onClick={() => setShowTermsModal(true)}
-              className="flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-3.5 py-2 font-semibold text-white"
-            >
-              <Plus className="h-3.5 w-3.5" /> Create new terms
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-base font-semibold">Terms of access (NDA & Disclaimers)</h3>
+              <p className="text-[11px] text-[var(--apple-text-muted)]">
+                Participants in assigned groups must accept enabled agreements before entering the Data Room.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const rows = meta?.acceptances || [];
+                  const csv = [
+                    "Terms Title,Participant,Email,Accepted At",
+                    ...rows.map((r) => `"${r.termsTitle}","${r.firstName} ${r.lastName}","${r.email}","${r.acceptedAt}"`),
+                  ].join("\n");
+                  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${project.name}-accepted-terms.csv`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="flex items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-surface)] px-3 py-2 font-medium hover:bg-[var(--apple-hover)]"
+              >
+                <Download className="h-3.5 w-3.5" /> Download accepted terms ({meta?.acceptances?.length || 0})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingTermId(null);
+                  setTermTitle("NDA_Kleen_New");
+                  setTermType("NDA");
+                  setTermDisplay("On first sign-in");
+                  setTermGroupIds([]);
+                  setTermContent(
+                    "By accessing Kleen Data Room, you agree to maintain strict confidentiality of all mirrored documents and disclosures."
+                  );
+                  setShowTermsModal(true);
+                }}
+                className="flex items-center gap-1.5 rounded-xl bg-[#007AFF] px-3.5 py-2 font-semibold text-white"
+              >
+                <Plus className="h-3.5 w-3.5" /> Create new terms
+              </button>
+            </div>
           </div>
           <div className="apple-card overflow-hidden">
             <table className="w-full text-left">
@@ -624,59 +680,103 @@ export function SettingsView({
                 <tr>
                   <th className="px-4 py-3">Terms of access</th>
                   <th className="px-4 py-3">Display</th>
+                  <th className="px-4 py-3">Assigned groups</th>
                   <th className="px-4 py-3">Created</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--apple-border)]">
-                {(meta?.terms || []).map((t) => (
-                  <tr key={t.id}>
-                    <td className="px-4 py-3 font-medium">{t.title}</td>
-                    <td className="px-4 py-3">{t.displayMode}</td>
-                    <td className="px-4 py-3 tabular-nums">{formatDateShort(t.createdAt)}</td>
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={t.enabled}
-                        onChange={async () => {
-                          await fetch("/api/settings", {
-                            method: "PATCH",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ scope: "toggle-terms", id: t.id }),
-                          });
-                          loadMeta();
-                        }}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="inline-flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewTerm({ title: t.title, content: t.content })}
-                          className="rounded p-1 hover:bg-[var(--apple-hover)]"
-                          title="Preview as user"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
+                {(meta?.terms || []).map((t) => {
+                  const gIds: string[] = JSON.parse(t.assignedGroupIds || "[]");
+                  const gNames =
+                    gIds.length === 0
+                      ? ["All participant groups"]
+                      : gIds.map((gid) => groups.find((g) => g.id === gid)?.name || gid);
+                  return (
+                    <tr key={t.id} className="hover:bg-[var(--apple-hover)]">
+                      <td className="px-4 py-3 font-medium">
+                        <div>{t.title}</div>
+                        <div className="text-[10px] text-[var(--apple-text-muted)]">{t.type}</div>
+                      </td>
+                      <td className="px-4 py-3">{t.displayMode}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {gNames.map((gn) => (
+                            <span
+                              key={gn}
+                              className="rounded-full bg-[var(--apple-selected)] px-2 py-0.5 text-[10px] font-medium text-[#007AFF]"
+                            >
+                              {gn}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 tabular-nums">{formatDateShort(t.createdAt)}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={t.enabled}
+                          onChange={async () => {
                             await fetch("/api/settings", {
                               method: "PATCH",
                               headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ scope: "delete-terms", id: t.id }),
+                              body: JSON.stringify({ scope: "toggle-terms", id: t.id }),
                             });
                             loadMeta();
+                            onRefreshSession();
                           }}
-                          className="rounded p-1 text-red-500 hover:bg-red-500/10"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTermId(t.id);
+                              setTermTitle(t.title);
+                              setTermType(t.type);
+                              setTermDisplay(t.displayMode);
+                              setTermGroupIds(JSON.parse(t.assignedGroupIds || "[]"));
+                              setTermContent(t.content);
+                              setShowTermsModal(true);
+                            }}
+                            className="rounded-lg p-1.5 text-[var(--apple-text-secondary)] hover:bg-[var(--apple-bg)] hover:text-[#007AFF]"
+                            title="Edit terms"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewAccepted(false);
+                              setPreviewTerm(t);
+                            }}
+                            className="rounded-lg p-1.5 text-[var(--apple-text-secondary)] hover:bg-[var(--apple-bg)] hover:text-[#007AFF]"
+                            title="Preview as a user"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await fetch("/api/settings", {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ scope: "delete-terms", id: t.id }),
+                              });
+                              loadMeta();
+                            }}
+                            className="rounded-lg p-1.5 text-red-500 hover:bg-red-500/10"
+                            title="Delete terms"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -947,7 +1047,8 @@ export function SettingsView({
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                scope: "create-terms",
+                scope: editingTermId ? "update-terms" : "create-terms",
+                id: editingTermId,
                 title: termTitle,
                 type: termType,
                 displayMode: termDisplay,
@@ -956,60 +1057,166 @@ export function SettingsView({
               }),
             });
             setShowTermsModal(false);
+            setEditingTermId(null);
+            showToast(editingTermId ? "Agreement updated" : "Agreement created");
             loadMeta();
+            onRefreshSession();
           }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
         >
           <div className="apple-card w-full max-w-lg space-y-3 p-6 text-xs">
-            <h3 className="text-base font-semibold">Create Terms of Access</h3>
-            <input required value={termTitle} onChange={(e) => setTermTitle(e.target.value)} placeholder="Title" className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2" />
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold">
+                {editingTermId ? "Edit Terms of Access" : "Create Terms of Access"}
+              </h3>
+              <button type="button" onClick={() => setShowTermsModal(false)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div>
+              <label className="mb-1 block font-medium">Title</label>
+              <input
+                required
+                value={termTitle}
+                onChange={(e) => setTermTitle(e.target.value)}
+                placeholder="Title"
+                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+              />
+            </div>
             <div className="grid grid-cols-2 gap-2">
-              <select value={termType} onChange={(e) => setTermType(e.target.value)} className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2">
-                <option>NDA</option>
-                <option>Terms and conditions of access</option>
-                <option>Confidentiality agreement</option>
-                <option>Disclaimer</option>
-              </select>
-              <select value={termDisplay} onChange={(e) => setTermDisplay(e.target.value)} className="rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2">
-                <option>On first sign-in</option>
-                <option>On each sign-in</option>
-              </select>
+              <div>
+                <label className="mb-1 block font-medium">Type</label>
+                <select
+                  value={termType}
+                  onChange={(e) => setTermType(e.target.value)}
+                  className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                >
+                  <option>NDA</option>
+                  <option>Terms and conditions of access</option>
+                  <option>Confidentiality agreement</option>
+                  <option>Disclaimer</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block font-medium">Display terms of access</label>
+                <select
+                  value={termDisplay}
+                  onChange={(e) => setTermDisplay(e.target.value)}
+                  className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] px-3 py-2"
+                >
+                  <option>On first sign-in</option>
+                  <option>On each sign-in</option>
+                </select>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {groups.filter((g) => g.role !== "Administrator").map((g) => (
-                <label key={g.id} className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={termGroupIds.includes(g.id)}
-                    onChange={(e) =>
-                      setTermGroupIds((prev) => (e.target.checked ? [...prev, g.id] : prev.filter((id) => id !== g.id)))
-                    }
-                  />
-                  {g.name}
-                </label>
-              ))}
+            <div>
+              <label className="mb-1 block font-medium">
+                Assigned groups (leave all unchecked to apply to ALL participant groups)
+              </label>
+              <div className="flex flex-wrap gap-2.5 rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)]/60 p-2.5">
+                {groups
+                  .filter((g) => g.role !== "Administrator")
+                  .map((g) => (
+                    <label key={g.id} className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={termGroupIds.includes(g.id)}
+                        onChange={(e) =>
+                          setTermGroupIds((prev) =>
+                            e.target.checked ? [...prev, g.id] : prev.filter((id) => id !== g.id)
+                          )
+                        }
+                      />
+                      {g.name}
+                    </label>
+                  ))}
+              </div>
             </div>
-            <textarea required rows={4} value={termContent} onChange={(e) => setTermContent(e.target.value)} placeholder="Legal NDA / terms body..." className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-3" />
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowTermsModal(false)} className="rounded-xl border border-[var(--apple-border)] px-4 py-2">Cancel</button>
-              <button type="submit" className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">Create</button>
+            <div>
+              <label className="mb-1 block font-medium">Terms content</label>
+              <textarea
+                required
+                rows={5}
+                value={termContent}
+                onChange={(e) => setTermContent(e.target.value)}
+                placeholder="Legal NDA / terms body..."
+                className="w-full rounded-xl border border-[var(--apple-border-strong)] bg-[var(--apple-bg)] p-3 leading-relaxed"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowTermsModal(false)}
+                className="rounded-xl border border-[var(--apple-border)] px-4 py-2"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">
+                {editingTermId ? "Save changes" : "Create"}
+              </button>
             </div>
           </div>
         </form>
       )}
 
       {previewTerm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs">
           <div className="apple-card w-full max-w-lg space-y-4 p-6 text-xs">
             <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-3">
-              <span className="font-semibold text-[#007AFF]">Previewing as a user — {previewTerm.title}</span>
-              <button type="button" onClick={() => setPreviewTerm(null)}><X className="h-4 w-4" /></button>
-            </div>
-            <p className="leading-relaxed text-[var(--apple-text-secondary)]">{previewTerm.content}</p>
-            <div className="flex justify-end">
-              <button type="button" onClick={() => setPreviewTerm(null)} className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white">
-                Close preview
+              <div>
+                <div className="text-[11px] font-semibold text-[#007AFF]">Previewing as a user</div>
+                <h3 className="text-base font-semibold">{previewTerm.title}</h3>
+              </div>
+              <button type="button" onClick={() => setPreviewTerm(null)}>
+                <X className="h-4 w-4" />
               </button>
+            </div>
+            <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] p-4 leading-relaxed text-[var(--apple-text-secondary)]">
+              {previewTerm.content}
+            </div>
+            <label className="flex items-center gap-2 font-medium">
+              <input
+                type="checkbox"
+                checked={previewAccepted}
+                onChange={(e) => setPreviewAccepted(e.target.checked)}
+              />
+              By accepting, I confirm I have read the terms
+            </label>
+            <div className="flex items-center justify-between pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const t = previewTerm;
+                  setPreviewTerm(null);
+                  setEditingTermId(t.id);
+                  setTermTitle(t.title);
+                  setTermType(t.type);
+                  setTermDisplay(t.displayMode);
+                  setTermGroupIds(JSON.parse(t.assignedGroupIds || "[]"));
+                  setTermContent(t.content);
+                  setShowTermsModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--apple-border-strong)] px-3.5 py-2 font-medium hover:bg-[var(--apple-hover)]"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit agreement
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewTerm(null)}
+                  className="rounded-xl border border-[var(--apple-border)] px-4 py-2"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  disabled={!previewAccepted}
+                  onClick={() => setPreviewTerm(null)}
+                  className="rounded-xl bg-[#007AFF] px-4 py-2 font-semibold text-white disabled:opacity-40"
+                >
+                  Accept
+                </button>
+              </div>
             </div>
           </div>
         </div>
